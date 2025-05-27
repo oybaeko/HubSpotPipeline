@@ -4,7 +4,7 @@ from src.bigquery_utils import (
     overwrite_owners_into_bigquery,
     insert_deals_into_bigquery
 )
-
+# test
 def main():
     companies = None
     owners = None
