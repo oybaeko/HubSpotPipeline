@@ -1,0 +1,42 @@
+# Ignore all credentials, secrets, and key files regardless of naming
+*.pyc
+__pycache__/
+.env
+.env.*
+/secrets/
+*.env
+
+# Ignore all secret/credential JSON files anywhere
+*secret*.json
+*credential*.json
+*service-account*.json
+*account*.json
+*-key.json
+*oauth*.json
+*api*.json
+*token*.json
+*hubspot*.json
+*bigquery*.json
+*gcp*.json
+*google*.json
+*firebase*.json
+
+# Ignore secrets/configs in specific folders
+/secrets/*.json
+/config/*secret*.json
+/config/*credential*.json
+
+# Other standard ignores (editor, OS, data, logs, etc.)
+.vscode/
+.DS_Store
+data/
+*.log
+tests/output/
+notebooks/.ipynb_checkpoints/
+.gcloud/
+.idea/
+.pytest_cache/
+Thumbs.db
+*.bak
+*.local
+.ipynb_checkpoints/
