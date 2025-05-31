@@ -1,11 +1,12 @@
+# ─── Companies ───────────────────────────────────────────────────────────────────
 SCHEMA_COMPANIES = [
     ("company_id", "STRING"),
     ("company_name", "STRING"),
     ("lifecycle_stage", "STRING"),
     ("lead_status", "STRING"),
     ("hubspot_owner_id", "STRING"),
-    ("company_type", "STRING"),       # ✅ NEW
-    ("snapshot_id", "STRING"),        # ✅ NEW
+    ("company_type", "STRING"),       
+    ("snapshot_id", "STRING"),        
     ("timestamp", "TIMESTAMP")
 ]
 
@@ -15,8 +16,35 @@ HUBSPOT_COMPANY_FIELD_MAP = {
     "lifecycle_stage": "lifecyclestage",
     "lead_status": "hs_lead_status",
     "hubspot_owner_id": "hubspot_owner_id",
-    "company_type": "type"  # ✅ NEW
+    "company_type": "type"  
 }
+
+# ─── Contacts ────────────────────────────────────────────────────────────────────
+SCHEMA_CONTACTS = [
+    ("contact_id", "STRING"),
+    ("email", "STRING"),
+    ("first_name", "STRING"),
+    ("last_name", "STRING"),
+    ("hubspot_owner_id", "STRING"),
+    ("phone", "STRING"),
+    ("job_title", "STRING"),
+    ("lifecycle_stage", "STRING"),
+    ("snapshot_id", "STRING"),   # for your snapshot runs
+    ("timestamp", "TIMESTAMP"),
+]
+
+HUBSPOT_CONTACT_FIELD_MAP = {
+    "contact_id":       "id",
+    "email":            "email",
+    "first_name":       "firstname",
+    "last_name":        "lastname",
+    "hubspot_owner_id": "hubspot_owner_id",
+    "phone":            "phone",
+    "job_title":        "jobtitle",
+    "lifecycle_stage":  "lifecyclestage",
+}
+
+# ─── Owners / Users ──────────────────────────────────────────────────────────────
 
 SCHEMA_OWNERS = [
     ("owner_id", "STRING"),
@@ -35,6 +63,9 @@ HUBSPOT_OWNER_FIELD_MAP = {
     "user_id": "userId",
     "active": "active"
 }
+
+# ─── Deals ───────────────────────────────────────────────────────────────────────
+
 SCHEMA_DEALS = [
     ("deal_id", "STRING"),
     ("deal_name", "STRING"),
@@ -77,6 +108,7 @@ SCHEMA_STAGE_MAPPING = [
     ("adjusted_score", "FLOAT")
 ]
 
+# ─── Pipeline  ───────────────────────────────────────────────────────────────────
 SCHEMA_PIPELINE_UNITS_SNAPSHOT = [
     ("snapshot_id", "STRING"),               # ✅ NEW
     ("snapshot_timestamp", "TIMESTAMP"),
@@ -109,3 +141,4 @@ SCHEMA_PIPELINE_SCORE_HISTORY = [
     ("total_score", "FLOAT"),
     ("snapshot_timestamp", "TIMESTAMP")
 ]
+

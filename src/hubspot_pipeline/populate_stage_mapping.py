@@ -1,7 +1,8 @@
+import logging
 from google.cloud import bigquery
-from config.config import BIGQUERY_PROJECT_ID, DATASET_ID
-from src.schema import SCHEMA_STAGE_MAPPING
-from src.bigquery_utils import recreate_table
+from .config.config import BIGQUERY_PROJECT_ID, DATASET_ID
+from .schema import SCHEMA_STAGE_MAPPING
+from .bigquery_utils import recreate_table
 
 def populate_stage_mapping():
     client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
@@ -38,7 +39,7 @@ def populate_stage_mapping():
     job = client.load_table_from_json(stage_mapping, table_ref, job_config=job_config)
     job.result()
 
-    print(f"✅ Loaded {len(stage_mapping)} rows into {table_ref}")
+    logging.info(f"✅ Loaded {len(stage_mapping)} rows into {table_ref}")
 
 if __name__ == "__main__":
     populate_stage_mapping()

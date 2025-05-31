@@ -1,8 +1,9 @@
+import logging
 import requests
 from google.cloud import bigquery
-from config.config import HUBSPOT_API_KEY, BIGQUERY_PROJECT_ID, DATASET_ID
-from src.schema import SCHEMA_DEAL_STAGE_REFERENCE
-from src.bigquery_utils import recreate_table
+from .config.config import HUBSPOT_API_KEY, BIGQUERY_PROJECT_ID, DATASET_ID
+from .schema import SCHEMA_DEAL_STAGE_REFERENCE
+from .bigquery_utils import recreate_table
 
 def populate_deal_stage_reference():
     url = "https://api.hubapi.com/crm/v3/pipelines/deals"
@@ -13,7 +14,7 @@ def populate_deal_stage_reference():
 
     response = requests.get(url, headers=headers)
     if response.status_code != 200:
-        print(f"❌ Failed to fetch pipelines: {response.status_code} - {response.text}")
+        logging.info(f"❌ Failed to fetch pipelines: {response.status_code} - {response.text}")
         return
 
     pipelines = response.json().get("results", [])
@@ -43,7 +44,7 @@ def populate_deal_stage_reference():
     job = client.load_table_from_json(records, table_ref, job_config=job_config)
     job.result()
 
-    print(f"✅ Loaded {len(records)} deal stage records into {table_ref}")
+    logging.info(f"✅ Loaded {len(records)} deal stage records into {table_ref}")
 
 if __name__ == "__main__":
     populate_deal_stage_reference()

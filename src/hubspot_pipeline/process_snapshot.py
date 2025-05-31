@@ -1,15 +1,15 @@
+import logging, time
 from google.cloud import bigquery
-from config.config import BIGQUERY_PROJECT_ID, DATASET_ID, BQ_PIPELINE_UNITS_TABLE, BQ_PIPELINE_SCORE_HISTORY_TABLE, BQ_SNAPSHOT_REGISTRY_TABLE
-import time
+from .config.config import BIGQUERY_PROJECT_ID, DATASET_ID, BQ_PIPELINE_UNITS_TABLE, BQ_PIPELINE_SCORE_HISTORY_TABLE, BQ_SNAPSHOT_REGISTRY_TABLE
 
 def process_snapshot(snapshot_id):
     """
     Processes a snapshot by running the `process_unit_score_for_snapshot` and `process_score_history_for_snapshot` functions.
     """
-    print(f"🔄 Processing snapshot: {snapshot_id}")
+    logging.info(f"🔄 Processing snapshot: {snapshot_id}")
     process_unit_score_for_snapshot(snapshot_id)
     process_score_history_for_snapshot(snapshot_id)
-    print(f"✅ Snapshot {snapshot_id} processed successfully.")
+    logging.info(f"✅ Snapshot {snapshot_id} processed successfully.")
 
 
 def process_unit_score_for_snapshot(snapshot_id):
@@ -24,7 +24,7 @@ def process_unit_score_for_snapshot(snapshot_id):
         - Executes a BigQuery SQL query with the provided snapshot_id.
         - Appends the processed and scored data to the destination BigQuery table specified by
           BQ_PIPELINE_UNITS_TABLE.
-        - Prints a confirmation message upon successful completion.
+        - logging.infos a confirmation message upon successful completion.
 
     Raises:
         google.api_core.exceptions.GoogleAPIError: If the BigQuery job fails."""
@@ -99,7 +99,7 @@ def process_unit_score_for_snapshot(snapshot_id):
     job = client.query(query, job_config=job_config)
     job.result()
 
-    print(f"✅ Processed snapshot_id = {snapshot_id} → {BQ_PIPELINE_UNITS_TABLE}")
+    logging.info(f"✅ Processed snapshot_id = {snapshot_id} → {BQ_PIPELINE_UNITS_TABLE}")
 
 def process_score_history_for_snapshot(snapshot_id):
     """Processes and appends score history data for a given snapshot to the BigQuery score history table.
@@ -114,7 +114,7 @@ def process_score_history_for_snapshot(snapshot_id):
     Side Effects:
         - Waits for 10 seconds before executing the query.
         - Appends aggregated score history data to the BigQuery score history table.
-        - Prints a confirmation message upon successful completion."""
+        - logging.infos a confirmation message upon successful completion."""
     
     time.sleep(10)  # Optional: wait for streaming buffer to flush
     client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
@@ -142,7 +142,7 @@ def process_score_history_for_snapshot(snapshot_id):
 
     job = client.query(query, job_config=job_config)
     job.result()
-    print(f"✅ Appended score history for snapshot: {snapshot_id}")
+    logging.info(f"✅ Appended score history for snapshot: {snapshot_id}")
 
 
 
@@ -166,12 +166,12 @@ def reprocess_all_score_summaries():
     """
     snapshot_ids = [row["snapshot_id"] for row in client.query(query).result()]
     
-    print(f"🔁 Reprocessing {len(snapshot_ids)} snapshots for score summary...")
+    logging.info(f"🔁 Reprocessing {len(snapshot_ids)} snapshots for score summary...")
     for snapshot_id in snapshot_ids:
-        print(f"🔄 Processing snapshot {snapshot_id}")
+        logging.info(f"🔄 Processing snapshot {snapshot_id}")
         process_score_history_for_snapshot(snapshot_id)
     
-    print("✅ All snapshots reprocessed into hs_score_summary.")
+    logging.info("✅ All snapshots reprocessed into hs_score_summary.")
 
 
 if __name__ == "__main__":

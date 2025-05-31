@@ -1,7 +1,8 @@
+import logging
 from datetime import datetime, timezone
 from google.cloud import bigquery
-from config.config import BIGQUERY_PROJECT_ID, DATASET_ID, BQ_COMPANY_TABLE, BQ_OWNER_TABLE, BQ_DEALS_TABLE
-from src.schema import SCHEMA_COMPANIES, HUBSPOT_COMPANY_FIELD_MAP, SCHEMA_OWNERS, HUBSPOT_OWNER_FIELD_MAP, SCHEMA_DEALS, HUBSPOT_DEAL_FIELD_MAP
+from .config.config import BIGQUERY_PROJECT_ID, DATASET_ID, BQ_COMPANY_TABLE, BQ_OWNER_TABLE, BQ_DEALS_TABLE
+from .schema import SCHEMA_COMPANIES, HUBSPOT_COMPANY_FIELD_MAP, SCHEMA_OWNERS, HUBSPOT_OWNER_FIELD_MAP, SCHEMA_DEALS, HUBSPOT_DEAL_FIELD_MAP
 
 DEBUG = True  # Set to False to disable debug output
 
@@ -9,7 +10,7 @@ def insert_companies_into_bigquery(companies, snapshot_id):
     client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
     table_ref = f"{BIGQUERY_PROJECT_ID}.{DATASET_ID}.{BQ_COMPANY_TABLE}"
     if DEBUG:
-        print(f"Inserting companies into table: {table_ref}")
+        logging.info(f"Inserting companies into table: {table_ref}")
 
     rows_to_insert = []
     now = datetime.now(timezone.utc).isoformat()
@@ -33,9 +34,9 @@ def insert_companies_into_bigquery(companies, snapshot_id):
 
     errors = client.insert_rows_json(table_ref, rows_to_insert)
     if errors:
-        print(f"❌ Errors inserting companies: {errors}")
+        logging.info(f"❌ Errors inserting companies: {errors}")
     else:
-        print(f"✅ Inserted {len(rows_to_insert)} companies into {BQ_COMPANY_TABLE}")
+        logging.info(f"✅ Inserted {len(rows_to_insert)} companies into {BQ_COMPANY_TABLE}")
 
 def overwrite_owners_into_bigquery(owners):
     client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
@@ -53,15 +54,15 @@ def overwrite_owners_into_bigquery(owners):
         rows_to_insert.append(row)
 
     if DEBUG:
-        print(f"Overwriting table: {table_ref}")
+        logging.info(f"Overwriting table: {table_ref}")
         for row in rows_to_insert[:3]:
-            print(row)
+            logging.info(row)
 
     job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
     job = client.load_table_from_json(rows_to_insert, table_ref, job_config=job_config)
     job.result()
 
-    print(f"✅ Overwrote table {table_ref} with {len(rows_to_insert)} owner records.")
+    logging.info(f"✅ Overwrote table {table_ref} with {len(rows_to_insert)} owner records.")
 
 
 
@@ -74,7 +75,7 @@ def recreate_table(table_name, schema_fields):
         schema_fields (list): List of (name, field_type) tuples for the schema.
 
     This function deletes the existing table (if it exists) and creates a new one
-    using the provided schema. It prints status messages for deletion and creation steps.
+    using the provided schema. It logging.infos status messages for deletion and creation steps.
     """
     client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
     table_ref = f"{BIGQUERY_PROJECT_ID}.{DATASET_ID}.{table_name}"
@@ -83,13 +84,13 @@ def recreate_table(table_name, schema_fields):
 
     try:
         client.delete_table(table_ref, not_found_ok=True)
-        print(f"🗑️ Deleted existing table: {table_ref}")
+        logging.info(f"🗑️ Deleted existing table: {table_ref}")
     except Exception as e:
-        print(f"⚠️ Error deleting table: {e}")
+        logging.info(f"⚠️ Error deleting table: {e}")
 
     table = bigquery.Table(table_ref, schema=schema)
     client.create_table(table)
-    print(f"✅ Created table: {table_ref}")
+    logging.info(f"✅ Created table: {table_ref}")
 
 
 def insert_deals_into_bigquery(deals, snapshot_id):
@@ -126,9 +127,9 @@ def insert_deals_into_bigquery(deals, snapshot_id):
 
     errors = client.insert_rows_json(table_ref, rows_to_insert)
     if errors:
-        print(f"❌ Errors inserting deals: {errors}")
+        logging.info(f"❌ Errors inserting deals: {errors}")
     else:
-        print(f"✅ Inserted {len(rows_to_insert)} deals into {BQ_DEALS_TABLE}")
+        logging.info(f"✅ Inserted {len(rows_to_insert)} deals into {BQ_DEALS_TABLE}")
 
 
 def delete_all_tables_in_dataset():
@@ -138,7 +139,7 @@ def delete_all_tables_in_dataset():
     """
     confirm = input(f"⚠️ This will permanently DELETE ALL TABLES in dataset {BIGQUERY_PROJECT_ID}.{DATASET_ID}. Type 'YES' to confirm: ")
     if confirm.strip().upper() != "YES":
-        print("❌ Aborted. No tables were deleted.")
+        logging.info("❌ Aborted. No tables were deleted.")
         return False
 
     client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
@@ -146,13 +147,13 @@ def delete_all_tables_in_dataset():
     tables = list(client.list_tables(dataset_ref))
 
     if not tables:
-        print("✅ No tables to delete.")
+        logging.info("✅ No tables to delete.")
         return True
 
     for table in tables:
         table_id = f"{dataset_ref}.{table.table_id}"
         client.delete_table(table_id, not_found_ok=True)
-        print(f"🗑️ Deleted table: {table_id}")
+        logging.info(f"🗑️ Deleted table: {table_id}")
 
-    print("✅ All tables deleted.")
+    logging.info("✅ All tables deleted.")
     return True

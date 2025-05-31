@@ -1,0 +1,16 @@
+LICENSE
+README.md
+setup.py
+src/hubspot_pipeline/__init__.py
+src/hubspot_pipeline/bigquery_utils.py
+src/hubspot_pipeline/fetch_hubspot_data.py
+src/hubspot_pipeline/populate_deal_stage_reference.py
+src/hubspot_pipeline/populate_stage_mapping.py
+src/hubspot_pipeline/process_snapshot.py
+src/hubspot_pipeline/recreate.py
+src/hubspot_pipeline/schema.py
+src/hubspot_pipeline/snapshot_runner.py
+src/hubspot_pipeline.egg-info/PKG-INFO
+src/hubspot_pipeline.egg-info/SOURCES.txt
+src/hubspot_pipeline.egg-info/dependency_links.txt
+src/hubspot_pipeline.egg-info/top_level.txt
