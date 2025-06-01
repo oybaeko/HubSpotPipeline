@@ -1,159 +1,186 @@
+# src/hubspot_pipeline/bigquery_utils.py
+
 import logging
-from datetime import datetime, timezone
 from google.cloud import bigquery
-from .config.config import BIGQUERY_PROJECT_ID, DATASET_ID, BQ_COMPANY_TABLE, BQ_OWNER_TABLE, BQ_DEALS_TABLE
-from .schema import SCHEMA_COMPANIES, HUBSPOT_COMPANY_FIELD_MAP, SCHEMA_OWNERS, HUBSPOT_OWNER_FIELD_MAP, SCHEMA_DEALS, HUBSPOT_DEAL_FIELD_MAP
+from google.api_core.exceptions import NotFound, GoogleAPIError
 
-DEBUG = True  # Set to False to disable debug output
+from .config.config import BIGQUERY_PROJECT_ID, DATASET_ID
 
-def insert_companies_into_bigquery(companies, snapshot_id):
-    client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
-    table_ref = f"{BIGQUERY_PROJECT_ID}.{DATASET_ID}.{BQ_COMPANY_TABLE}"
-    if DEBUG:
-        logging.info(f"Inserting companies into table: {table_ref}")
+# ────────────────────────────────────────────────────────────────────────────────
+#  Table Recreation & Deletion Helpers
+# ────────────────────────────────────────────────────────────────────────────────
 
-    rows_to_insert = []
-    now = datetime.now(timezone.utc).isoformat()
-
-    for company in companies:
-        props = company.get("properties", {})
-        row = {}
-
-        for field_name, _ in SCHEMA_COMPANIES:
-            if field_name == "company_id":
-                row[field_name] = str(company.get("id", ""))
-            elif field_name == "timestamp":
-                row[field_name] = now
-            elif field_name == "snapshot_id":
-                row[field_name] = snapshot_id
-            else:
-                hs_key = HUBSPOT_COMPANY_FIELD_MAP.get(field_name, field_name)
-                row[field_name] = props.get(hs_key, "")
-
-        rows_to_insert.append(row)
-
-    errors = client.insert_rows_json(table_ref, rows_to_insert)
-    if errors:
-        logging.info(f"❌ Errors inserting companies: {errors}")
-    else:
-        logging.info(f"✅ Inserted {len(rows_to_insert)} companies into {BQ_COMPANY_TABLE}")
-
-def overwrite_owners_into_bigquery(owners):
-    client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
-    table_ref = f"{BIGQUERY_PROJECT_ID}.{DATASET_ID}.{BQ_OWNER_TABLE}"
-
-    rows_to_insert = []
-    for owner in owners:
-        row = {}
-        for name, _ in SCHEMA_OWNERS:
-            if name == "timestamp":
-                row[name] = datetime.now(timezone.utc).isoformat()
-            else:
-                hs_key = HUBSPOT_OWNER_FIELD_MAP.get(name, name)
-                row[name] = owner.get(hs_key, "UNKNOWN")
-        rows_to_insert.append(row)
-
-    if DEBUG:
-        logging.info(f"Overwriting table: {table_ref}")
-        for row in rows_to_insert[:3]:
-            logging.info(row)
-
-    job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
-    job = client.load_table_from_json(rows_to_insert, table_ref, job_config=job_config)
-    job.result()
-
-    logging.info(f"✅ Overwrote table {table_ref} with {len(rows_to_insert)} owner records.")
-
-
-
-def recreate_table(table_name, schema_fields):
+def recreate_table(table_name: str, schema: list[tuple[str, str]]):
     """
-    Recreates a BigQuery table with the specified schema.
+    Drop (if exists) and recreate a BigQuery table with the given name and schema.
+    - table_name: name of the table within the DATASET_ID (e.g. 'hs_companies')
+    - schema: list of (column_name, column_type) tuples
 
-    Args:
-        table_name (str): The name of the table to recreate (without project/dataset).
-        schema_fields (list): List of (name, field_type) tuples for the schema.
-
-    This function deletes the existing table (if it exists) and creates a new one
-    using the provided schema. It logging.infos status messages for deletion and creation steps.
+    Raises:
+      GoogleAPIError on create failures.
     """
-    client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
-    table_ref = f"{BIGQUERY_PROJECT_ID}.{DATASET_ID}.{table_name}"
-
-    schema = [bigquery.SchemaField(name, field_type) for name, field_type in schema_fields]
-
-    try:
-        client.delete_table(table_ref, not_found_ok=True)
-        logging.info(f"🗑️ Deleted existing table: {table_ref}")
-    except Exception as e:
-        logging.info(f"⚠️ Error deleting table: {e}")
-
-    table = bigquery.Table(table_ref, schema=schema)
-    client.create_table(table)
-    logging.info(f"✅ Created table: {table_ref}")
-
-
-def insert_deals_into_bigquery(deals, snapshot_id):
-    client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
-    table_ref = f"{BIGQUERY_PROJECT_ID}.{DATASET_ID}.{BQ_DEALS_TABLE}"
-    now = datetime.now(timezone.utc).isoformat()
-
-    rows_to_insert = []
-
-    for deal in deals:
-        props = deal.get("properties", {})
-        associations = deal.get("associations", {})
-        companies = associations.get("companies", {}).get("results", [])
-        company_id = companies[0]["id"] if companies else None
-
-        row = {}
-        for field_name, _ in SCHEMA_DEALS:
-            if field_name == "deal_id":
-                row[field_name] = str(deal.get("id", ""))
-            elif field_name == "associated_company_id":
-                row[field_name] = str(company_id) if company_id else None
-            elif field_name == "timestamp":
-                row[field_name] = now
-            elif field_name == "snapshot_id":
-                row[field_name] = snapshot_id
-            else:
-                hs_key = HUBSPOT_DEAL_FIELD_MAP.get(field_name, field_name)
-                if field_name == "amount":
-                    row[field_name] = float(props.get(hs_key) or 0)
-                else:
-                    row[field_name] = props.get(hs_key, "")
-
-        rows_to_insert.append(row)
-
-    errors = client.insert_rows_json(table_ref, rows_to_insert)
-    if errors:
-        logging.info(f"❌ Errors inserting deals: {errors}")
-    else:
-        logging.info(f"✅ Inserted {len(rows_to_insert)} deals into {BQ_DEALS_TABLE}")
-
-
-def delete_all_tables_in_dataset():
-    """
-    Deletes all tables in the configured BigQuery dataset after user confirmation.
-    Returns True if deletion was performed, False if aborted.
-    """
-    confirm = input(f"⚠️ This will permanently DELETE ALL TABLES in dataset {BIGQUERY_PROJECT_ID}.{DATASET_ID}. Type 'YES' to confirm: ")
-    if confirm.strip().upper() != "YES":
-        logging.info("❌ Aborted. No tables were deleted.")
-        return False
-
     client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
     dataset_ref = f"{BIGQUERY_PROJECT_ID}.{DATASET_ID}"
-    tables = list(client.list_tables(dataset_ref))
+    table_id = f"{dataset_ref}.{table_name}"
 
-    if not tables:
-        logging.info("✅ No tables to delete.")
-        return True
+    # 1) Delete existing table if it exists
+    try:
+        client.delete_table(table_id, not_found_ok=True)
+        logging.info(f"🗑️ Deleted table {table_id} (if it existed).")
+    except GoogleAPIError as e:
+        logging.error(f"❌ Failed to delete existing table {table_id}: {e}")
+        raise
 
+    # 2) Construct new table schema
+    bq_schema = []
+    for col_name, col_type in schema:
+        bq_schema.append(bigquery.SchemaField(col_name, col_type))
+
+    table = bigquery.Table(table_id, schema=bq_schema)
+    try:
+        client.create_table(table)
+        logging.info(f"✅ Created table {table_id} with schema: {[c.name for c in bq_schema]}")
+    except GoogleAPIError as e:
+        logging.error(f"❌ Failed to create table {table_id}: {e}")
+        raise
+
+
+def delete_all_tables_in_dataset() -> bool:
+    """
+    Deletes every table in the dataset specified by (BIGQUERY_PROJECT_ID, DATASET_ID).
+    Returns True if all deletions were attempted without raising; False otherwise.
+    """
+    client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
+    dataset_ref = f"{BIGQUERY_PROJECT_ID}.{DATASET_ID}"
+
+    try:
+        tables = client.list_tables(dataset_ref)
+    except GoogleAPIError as e:
+        logging.error(f"❌ Failed to list tables in dataset {dataset_ref}: {e}")
+        return False
+
+    success = True
     for table in tables:
         table_id = f"{dataset_ref}.{table.table_id}"
-        client.delete_table(table_id, not_found_ok=True)
-        logging.info(f"🗑️ Deleted table: {table_id}")
+        try:
+            client.delete_table(table_id)
+            logging.info(f"🗑️ Deleted table {table_id}.")
+        except GoogleAPIError as e:
+            logging.error(f"❌ Failed to delete table {table_id}: {e}")
+            success = False
 
-    logging.info("✅ All tables deleted.")
-    return True
+    return success
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+#  Data‐Insertion Helpers
+# ────────────────────────────────────────────────────────────────────────────────
+
+def insert_companies_into_bigquery(companies: list[dict], snapshot_id: str):
+    """
+    Insert a list of HubSpot‐company dictionaries into the table `hs_companies`.
+    If `companies` is a nested list (e.g. [[{…}, {…}], [ {…} ]]), flatten one level.
+    Each `company` dict should have keys:
+      - 'id' (company_id)
+      - 'properties' (dict of property_name → value)
+    Adjust the property mapping here if your schema changes.
+    """
+    # 1) Flatten one level if needed
+    if companies and isinstance(companies[0], list):
+        logging.warning("🔄 Detected nested list in `companies`; flattening one level.")
+        companies = [item for sublist in companies for item in sublist]
+
+    rows_to_insert = []
+    for company in companies:
+        if not isinstance(company, dict):
+            logging.warning(f"⚠️ Skipping non‐dict company: {type(company)}")
+            continue
+
+        props = company.get("properties", {})
+        row = {
+            "company_id": company.get("id"),
+            "company_name": props.get("name"),
+            "lifecycle_stage": props.get("lifecyclestage"),
+            "lead_status": props.get("hs_lead_status"),
+            "hubspot_owner_id": props.get("hubspot_owner_id"),
+            "company_type": props.get("type"),
+            "snapshot_id": snapshot_id,
+            # If you have a timestamp field in your schema, adjust accordingly. For example:
+            # "timestamp": props.get("createdate")
+        }
+        rows_to_insert.append(row)
+
+    if not rows_to_insert:
+        logging.info("ℹ️ No valid company rows to insert; skipping.")
+        return
+
+    table_id = f"{BIGQUERY_PROJECT_ID}.{DATASET_ID}.hs_companies"
+    logging.info(f"Inserting {len(rows_to_insert)} companies into table: {table_id}")
+
+    client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
+    try:
+        errors = client.insert_rows_json(table_id, rows_to_insert)
+        if errors:
+            logging.error(f"❌ insert_companies_into_bigquery errors: {errors}")
+            raise GoogleAPIError(f"BigQuery insert errors: {errors}")
+        logging.info(f"✅ Successfully inserted {len(rows_to_insert)} companies into {table_id}")
+    except GoogleAPIError as e:
+        logging.error(f"❌ Failed to insert companies into {table_id}: {e}")
+        raise
+
+
+def insert_deals_into_bigquery(deals: list[dict], snapshot_id: str):
+    """
+    Insert a list of HubSpot‐deal dictionaries into the table `hs_deals`.
+    If `deals` is a nested list, flatten one level first.
+    Each `deal` dict should have:
+      - 'id' (deal_id)
+      - 'properties' (dict of property_name → value)
+      - 'associations' → {'companies': {'results': [ { 'id': ... }, … ] } }
+    """
+    # 1) Flatten one level if needed
+    if deals and isinstance(deals[0], list):
+        logging.warning("🔄 Detected nested list in `deals`; flattening one level.")
+        deals = [item for sublist in deals for item in sublist]
+
+    rows_to_insert = []
+    for deal in deals:
+        if not isinstance(deal, dict):
+            logging.warning(f"⚠️ Skipping non‐dict deal: {type(deal)}")
+            continue
+
+        props = deal.get("properties", {})
+        associations = deal.get("associations", {}).get("companies", {}).get("results", [])
+        associated_company_id = associations[0]["id"] if associations else None
+
+        row = {
+            "deal_id": deal.get("id"),
+            "deal_name": props.get("dealname"),
+            "deal_stage": props.get("dealstage"),
+            "deal_type": props.get("dealtype"),
+            "amount": float(props.get("amount") or 0),
+            "owner_id": props.get("hubspot_owner_id"),
+            "associated_company_id": associated_company_id,
+            "snapshot_id": snapshot_id,
+            # If you have a timestamp field in your schema, adjust accordingly. For example:
+            # "timestamp": props.get("createdate")
+        }
+        rows_to_insert.append(row)
+
+    if not rows_to_insert:
+        logging.info("ℹ️ No valid deal rows to insert; skipping.")
+        return
+
+    table_id = f"{BIGQUERY_PROJECT_ID}.{DATASET_ID}.hs_deals"
+    logging.info(f"Inserting {len(rows_to_insert)} deals into table: {table_id}")
+
+    client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
+    try:
+        errors = client.insert_rows_json(table_id, rows_to_insert)
+        if errors:
+            logging.error(f"❌ insert_deals_into_bigquery errors: {errors}")
+            raise GoogleAPIError(f"BigQuery insert errors: {errors}")
+        logging.info(f"✅ Successfully inserted {len(rows_to_insert)} deals into {table_id}")
+    except GoogleAPIError as e:
+        logging.error(f"❌ Failed to insert deals into {table_id}: {e}")
+        raise

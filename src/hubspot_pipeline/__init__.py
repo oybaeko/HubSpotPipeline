@@ -14,7 +14,6 @@ from .fetch_hubspot_data import (
 # ─── BigQuery Utilities ───────────────────────────────────────────────────────
 from .bigquery_utils import (
     insert_companies_into_bigquery,
-    overwrite_owners_into_bigquery,
     insert_deals_into_bigquery,
     recreate_table,
 )
@@ -24,7 +23,8 @@ from .process_snapshot import process_snapshot
 from .populate_deal_stage_reference import populate_deal_stage_reference
 from .populate_stage_mapping import populate_stage_mapping
 from .recreate import recreate_all_snapshots
-from .snapshot_runner import run_snapshot_and_process
+#from .snapshot_runner import run_snapshot_and_process
+from .populate_owners import overwrite_owners_into_bigquery
 
 # ─── Schema Definitions & Field Maps ──────────────────────────────────────────
 from .schema import (

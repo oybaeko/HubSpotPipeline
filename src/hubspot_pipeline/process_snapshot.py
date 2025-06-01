@@ -1,37 +1,52 @@
-import logging, time
+import logging
+import time
+
 from google.cloud import bigquery
-from .config.config import BIGQUERY_PROJECT_ID, DATASET_ID, BQ_PIPELINE_UNITS_TABLE, BQ_PIPELINE_SCORE_HISTORY_TABLE, BQ_SNAPSHOT_REGISTRY_TABLE
+from google.api_core.exceptions import GoogleAPIError
 
-def process_snapshot(snapshot_id):
+from .config.config import (
+    BIGQUERY_PROJECT_ID,
+    DATASET_ID,
+    BQ_PIPELINE_UNITS_TABLE,
+    BQ_PIPELINE_SCORE_HISTORY_TABLE,
+    BQ_SNAPSHOT_REGISTRY_TABLE,
+)
+
+
+def process_snapshot(snapshot_id: str):
     """
-    Processes a snapshot by running the `process_unit_score_for_snapshot` and `process_score_history_for_snapshot` functions.
+    Master function: processes a snapshot by running unit‐score and score‐history jobs in sequence.
     """
-    logging.info(f"🔄 Processing snapshot: {snapshot_id}")
-    process_unit_score_for_snapshot(snapshot_id)
-    process_score_history_for_snapshot(snapshot_id)
-    logging.info(f"✅ Snapshot {snapshot_id} processed successfully.")
+    logging.info(f"🔄 Starting full processing for snapshot: {snapshot_id}")
+    try:
+        process_unit_score_for_snapshot(snapshot_id)
+        process_score_history_for_snapshot(snapshot_id)
+        logging.info(f"✅ Completed full processing for snapshot: {snapshot_id}")
+    except Exception as e:
+        logging.error(f"❌ Error during process_snapshot({snapshot_id}): {e}", exc_info=True)
+        raise
 
 
-def process_unit_score_for_snapshot(snapshot_id):
-    """Processes a given snapshot by querying and transforming company and deal data from BigQuery,
-    combining lifecycle and deal stages, mapping them to scoring metadata, and appending the results
-    to the pipeline units table.
+def process_unit_score_for_snapshot(snapshot_id: str):
+    """
+    Processes a given snapshot by:
+      1) Querying and transforming company + deal data from BigQuery,
+      2) Mapping each record to its combined_stage and score,
+      3) Appending results to the pipeline_units table.
 
     Args:
         snapshot_id (str): The identifier for the snapshot to process.
 
-    Side Effects:
-        - Executes a BigQuery SQL query with the provided snapshot_id.
-        - Appends the processed and scored data to the destination BigQuery table specified by
-          BQ_PIPELINE_UNITS_TABLE.
-        - logging.infos a confirmation message upon successful completion.
-
     Raises:
-        google.api_core.exceptions.GoogleAPIError: If the BigQuery job fails."""
-    
+        GoogleAPIError: If the BigQuery job fails.
+    """
+    logging.info(f"🔹 Entering process_unit_score_for_snapshot({snapshot_id})")
+
     client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
 
+    # Build the SQL string (we trim indentation to keep the code neat)
     query = f"""
+    -- Step 1: Filter companies for this snapshot
     WITH companies AS (
       SELECT 
         LOWER(lifecycle_stage) AS lifecycle_stage,
@@ -42,6 +57,7 @@ def process_unit_score_for_snapshot(snapshot_id):
       FROM `{BIGQUERY_PROJECT_ID}.{DATASET_ID}.hs_companies`
       WHERE snapshot_id = @snapshot_id
     ),
+    -- Step 2: Filter open deals for this snapshot
     deals AS (
       SELECT 
         LOWER(deal_stage) AS deal_stage,
@@ -56,6 +72,7 @@ def process_unit_score_for_snapshot(snapshot_id):
             WHERE is_closed = TRUE
         )
     ),
+    -- Step 3: Left‐join companies with their deals (if any)
     joined AS (
       SELECT
         c.snapshot_id,
@@ -72,10 +89,14 @@ def process_unit_score_for_snapshot(snapshot_id):
           WHEN c.lifecycle_stage IN ('salesqualifiedlead', 'closed-won', 'disqualified') THEN c.lifecycle_stage
           ELSE 'unmapped'
         END AS combined_stage,
-        CASE WHEN d.deal_id IS NULL THEN 'company' ELSE 'deal' END AS stage_source
+        CASE 
+          WHEN d.deal_id IS NULL THEN 'company' 
+          ELSE 'deal' 
+        END AS stage_source
       FROM companies c
       LEFT JOIN deals d ON d.associated_company_id = c.company_id
     ),
+    -- Step 4: Join the “scoring metadata” from stage_mapping
     scored AS (
       SELECT
         j.*,
@@ -83,97 +104,144 @@ def process_unit_score_for_snapshot(snapshot_id):
         sm.adjusted_score
       FROM joined j
       LEFT JOIN `{BIGQUERY_PROJECT_ID}.{DATASET_ID}.hs_stage_mapping` sm
-      ON sm.combined_stage = j.combined_stage
+        ON sm.combined_stage = j.combined_stage
     )
     SELECT * FROM scored
     """
+
+    logging.info("🔹 Submitting BigQuery job for unit scores...")
+    logging.debug(f"SQL for unit score (truncated to 200 chars):\n{query[:200]}...")
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
             bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id)
         ],
         destination=f"{BIGQUERY_PROJECT_ID}.{DATASET_ID}.{BQ_PIPELINE_UNITS_TABLE}",
-        write_disposition="WRITE_APPEND"
+        write_disposition="WRITE_APPEND",
     )
 
-    job = client.query(query, job_config=job_config)
-    job.result()
+    try:
+        job = client.query(query, job_config=job_config)
+        logging.info(f"   • BigQuery job ID (unit score): {job.job_id}")
+        job.result()  # Wait for completion
+        logging.info(f"✅ Unit‐score job completed and data appended to `{BQ_PIPELINE_UNITS_TABLE}`")
+    except GoogleAPIError as e:
+        logging.error(f"❌ BigQuery unit‐score job failed: {e}", exc_info=True)
+        raise
 
-    logging.info(f"✅ Processed snapshot_id = {snapshot_id} → {BQ_PIPELINE_UNITS_TABLE}")
+    logging.info(f"🔹 Exiting process_unit_score_for_snapshot({snapshot_id})")
 
-def process_score_history_for_snapshot(snapshot_id):
-    """Processes and appends score history data for a given snapshot to the BigQuery score history table.
 
-    This function executes a SQL query that aggregates company scores by snapshot, owner, and stage,
-    then appends the results to the designated BigQuery table. It waits briefly before querying to
-    ensure data consistency.
+def process_score_history_for_snapshot(snapshot_id: str):
+    """
+    Processes and appends score history data for a given snapshot to the BigQuery score history table.
+
+    Steps:
+      1) Sleep 10 seconds to allow streaming buffer flush (if any),
+      2) Aggregate pipeline_units rows by owner & combined_stage,
+      3) Append results to the BQ_PIPELINE_SCORE_HISTORY_TABLE.
 
     Args:
         snapshot_id (str): The unique identifier for the snapshot to process.
 
-    Side Effects:
-        - Waits for 10 seconds before executing the query.
-        - Appends aggregated score history data to the BigQuery score history table.
-        - logging.infos a confirmation message upon successful completion."""
-    
-    time.sleep(10)  # Optional: wait for streaming buffer to flush
+    Raises:
+        GoogleAPIError: If the BigQuery job fails.
+    """
+    logging.info(f"🔹 Entering process_score_history_for_snapshot({snapshot_id})")
+
+    # 1) Optional wait
+    wait_secs = 10
+    logging.info(f"   • Waiting {wait_secs}s to ensure pipeline_units data is available …")
+    time.sleep(wait_secs)
+
     client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
 
+    # Build the SQL string
     query = f"""
-        SELECT
-            snapshot_id,
-            owner_id,
-            combined_stage,
-            COUNT(DISTINCT company_id) AS num_companies,
-            SUM(adjusted_score) AS total_score,
-            MAX(snapshot_timestamp) AS snapshot_timestamp
-        FROM `{BIGQUERY_PROJECT_ID}.{DATASET_ID}.{BQ_PIPELINE_UNITS_TABLE}`
-        WHERE snapshot_id = @snapshot_id
-        GROUP BY snapshot_id, owner_id, combined_stage
+    SELECT
+      snapshot_id,
+      owner_id,
+      combined_stage,
+      COUNT(DISTINCT company_id) AS num_companies,
+      SUM(adjusted_score) AS total_score,
+      MAX(snapshot_timestamp) AS snapshot_timestamp
+    FROM `{BIGQUERY_PROJECT_ID}.{DATASET_ID}.{BQ_PIPELINE_UNITS_TABLE}`
+    WHERE snapshot_id = @snapshot_id
+    GROUP BY snapshot_id, owner_id, combined_stage
     """
+
+    logging.info("🔹 Submitting BigQuery job for score history …")
+    logging.debug(f"SQL for score history (truncated to 200 chars):\n{query[:200]}...")
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
             bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id)
         ],
         destination=f"{BIGQUERY_PROJECT_ID}.{DATASET_ID}.{BQ_PIPELINE_SCORE_HISTORY_TABLE}",
-        write_disposition="WRITE_APPEND"
+        write_disposition="WRITE_APPEND",
     )
 
-    job = client.query(query, job_config=job_config)
-    job.result()
-    logging.info(f"✅ Appended score history for snapshot: {snapshot_id}")
+    try:
+        job = client.query(query, job_config=job_config)
+        logging.info(f"   • BigQuery job ID (score history): {job.job_id}")
+        job.result()  # Wait for completion
+        logging.info(f"✅ Score‐history job completed and data appended to `{BQ_PIPELINE_SCORE_HISTORY_TABLE}`")
+    except GoogleAPIError as e:
+        logging.error(f"❌ BigQuery score‐history job failed: {e}", exc_info=True)
+        raise
 
+    logging.info(f"🔹 Exiting process_score_history_for_snapshot({snapshot_id})")
 
 
 def reprocess_all_score_summaries():
-    """Reprocesses all snapshots in the hs_snapshot_registry table to update their score summaries.
-    This function queries all snapshot IDs from the BigQuery table, ordered by their timestamp,
-    and iteratively calls `process_score_history_for_snapshot` for each snapshot. It provides
-    console output indicating progress and completion.
+    """
+    Reprocesses all snapshots in the hs_snapshot_registry table to update their score summaries.
+
+    1) Reads every snapshot_id from hs_snapshot_registry,
+    2) Iterates in chronological order, calling process_score_history_for_snapshot() for each.
 
     Raises:
-        google.cloud.exceptions.GoogleCloudError: If there is an error querying BigQuery.
-        Exception: If `process_score_history_for_snapshot` raises an exception. """
-    
-    client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
-    table_ref = f"{BIGQUERY_PROJECT_ID}.{DATASET_ID}.{BQ_SNAPSHOT_REGISTRY_TABLE}" 
-
-    query = f"""
-        SELECT snapshot_id
-        FROM `{table_ref}`
-        ORDER BY snapshot_timestamp
+        GoogleAPIError: If there is an error querying BigQuery.
     """
-    snapshot_ids = [row["snapshot_id"] for row in client.query(query).result()]
-    
-    logging.info(f"🔁 Reprocessing {len(snapshot_ids)} snapshots for score summary...")
-    for snapshot_id in snapshot_ids:
-        logging.info(f"🔄 Processing snapshot {snapshot_id}")
-        process_score_history_for_snapshot(snapshot_id)
-    
-    logging.info("✅ All snapshots reprocessed into hs_score_summary.")
+    logging.info("🔹 Entering reprocess_all_score_summaries()")
+
+    client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
+    table_ref = f"{BIGQUERY_PROJECT_ID}.{DATASET_ID}.{BQ_SNAPSHOT_REGISTRY_TABLE}"
+
+    # 1) Fetch all snapshot_ids
+    query = f"""
+    SELECT snapshot_id
+    FROM `{table_ref}`
+    ORDER BY snapshot_timestamp
+    """
+    logging.info(f"   • Fetching snapshot IDs from `{BQ_SNAPSHOT_REGISTRY_TABLE}` …")
+    try:
+        rows = client.query(query).result()
+        snapshot_ids = [row["snapshot_id"] for row in rows]
+        logging.info(f"   • Found {len(snapshot_ids)} snapshots to reprocess.")
+    except GoogleAPIError as e:
+        logging.error(f"❌ Failed to query `{BQ_SNAPSHOT_REGISTRY_TABLE}`: {e}", exc_info=True)
+        raise
+
+    # 2) Loop over each snapshot and re‐run score history
+    for idx, snapshot_id in enumerate(snapshot_ids, start=1):
+        logging.info(f"   🔄 ({idx}/{len(snapshot_ids)}) Reprocessing snapshot `{snapshot_id}` …")
+        try:
+            process_score_history_for_snapshot(snapshot_id)
+        except Exception as e:
+            logging.error(f"❌ Error reprocessing snapshot `{snapshot_id}`: {e}", exc_info=True)
+            # decide whether to continue or break; here we continue to attempt all
+            continue
+
+    logging.info("✅ Completed reprocess_all_score_summaries()")
 
 
 if __name__ == "__main__":
-    #reprocess_all_score_summaries()
-    process_snapshot("2025-05-25T20:13:32")
+    # Example hard‐coded test run (uncomment to test locally)
+    # reprocess_all_score_summaries()
+    test_snapshot = "2025-05-25T20:13:32"
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-8s %(message)s"
+    )
+    process_snapshot(test_snapshot)
