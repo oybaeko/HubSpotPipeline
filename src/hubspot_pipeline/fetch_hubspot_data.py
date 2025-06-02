@@ -123,11 +123,14 @@ def fetch_hs_objects(
     # 2) Otherwise, use /list (GET) with no filters
     else:
         logging.info("Using HubSpot ‘list’ endpoint for %s", object_type)
-
+       
+        #  ⬇️ Here we add "associations=companies" when object_type=="deals"
         params = {
             "limit": min(limit or 100, 100),
             "properties": ",".join(properties)
         }
+        if object_type == "deals":
+           params["associations"] = "companies"
 
         while True:
             if after:

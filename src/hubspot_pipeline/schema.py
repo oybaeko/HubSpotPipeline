@@ -33,7 +33,7 @@ SCHEMA_COMPANIES: List[Tuple[str, str]] = [
 ]
 
 HUBSPOT_COMPANY_FIELD_MAP: Dict[str, str] = {
-    "company_id": "id",
+    "company_id":             "id",
     "company_name":           "name",
     "lifecycle_stage":        "lifecyclestage",
     "lead_status":            "hs_lead_status",

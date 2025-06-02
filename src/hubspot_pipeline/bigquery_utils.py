@@ -2,9 +2,10 @@
 
 import logging
 from google.cloud import bigquery
-from google.api_core.exceptions import NotFound, GoogleAPIError
+from google.api_core.exceptions import GoogleAPIError
 
 from .config.config import BIGQUERY_PROJECT_ID, DATASET_ID
+from .schema import HUBSPOT_COMPANY_FIELD_MAP, HUBSPOT_DEAL_FIELD_MAP
 
 # ────────────────────────────────────────────────────────────────────────────────
 #  Table Recreation & Deletion Helpers
@@ -13,11 +14,6 @@ from .config.config import BIGQUERY_PROJECT_ID, DATASET_ID
 def recreate_table(table_name: str, schema: list[tuple[str, str]]):
     """
     Drop (if exists) and recreate a BigQuery table with the given name and schema.
-    - table_name: name of the table within the DATASET_ID (e.g. 'hs_companies')
-    - schema: list of (column_name, column_type) tuples
-
-    Raises:
-      GoogleAPIError on create failures.
     """
     client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
     dataset_ref = f"{BIGQUERY_PROJECT_ID}.{DATASET_ID}"
@@ -48,7 +44,6 @@ def recreate_table(table_name: str, schema: list[tuple[str, str]]):
 def delete_all_tables_in_dataset() -> bool:
     """
     Deletes every table in the dataset specified by (BIGQUERY_PROJECT_ID, DATASET_ID).
-    Returns True if all deletions were attempted without raising; False otherwise.
     """
     client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
     dataset_ref = f"{BIGQUERY_PROJECT_ID}.{DATASET_ID}"
@@ -79,11 +74,11 @@ def delete_all_tables_in_dataset() -> bool:
 def insert_companies_into_bigquery(companies: list[dict], snapshot_id: str):
     """
     Insert a list of HubSpot‐company dictionaries into the table `hs_companies`.
-    If `companies` is a nested list (e.g. [[{…}, {…}], [ {…} ]]), flatten one level.
-    Each `company` dict should have keys:
-      - 'id' (company_id)
-      - 'properties' (dict of property_name → value)
-    Adjust the property mapping here if your schema changes.
+    Automatically includes:
+      - company_id (from company["id"])
+      - all other columns in HUBSPOT_COMPANY_FIELD_MAP (from company["properties"])
+      - snapshot_id
+      - timestamp (from properties['createdate'])
     """
     # 1) Flatten one level if needed
     if companies and isinstance(companies[0], list):
@@ -97,17 +92,22 @@ def insert_companies_into_bigquery(companies: list[dict], snapshot_id: str):
             continue
 
         props = company.get("properties", {})
-        row = {
-            "company_id": company.get("id"),
-            "company_name": props.get("name"),
-            "lifecycle_stage": props.get("lifecyclestage"),
-            "lead_status": props.get("hs_lead_status"),
-            "hubspot_owner_id": props.get("hubspot_owner_id"),
-            "company_type": props.get("type"),
-            "snapshot_id": snapshot_id,
-            # If you have a timestamp field in your schema, adjust accordingly. For example:
-            # "timestamp": props.get("createdate")
-        }
+        row: dict[str, any] = {}
+
+        # 1.A) Special‐case the company_id (top‐level "id")
+        row["company_id"] = company.get("id")
+
+        # 1.B) Loop over every other mapped column
+        for col_name, hs_prop_name in HUBSPOT_COMPANY_FIELD_MAP.items():
+            if hs_prop_name == "id":
+                # we've already handled "id" above
+                continue
+            row[col_name] = props.get(hs_prop_name)
+
+        # 2) Add snapshot_id and timestamp
+        row["snapshot_id"] = snapshot_id
+        row["timestamp"]   = props.get("createdate")
+
         rows_to_insert.append(row)
 
     if not rows_to_insert:
@@ -115,7 +115,7 @@ def insert_companies_into_bigquery(companies: list[dict], snapshot_id: str):
         return
 
     table_id = f"{BIGQUERY_PROJECT_ID}.{DATASET_ID}.hs_companies"
-    logging.info(f"Inserting {len(rows_to_insert)} companies into table: {table_id}")
+    logging.info(f"⏳ Inserting {len(rows_to_insert)} companies into `{table_id}`…")
 
     client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
     try:
@@ -123,20 +123,21 @@ def insert_companies_into_bigquery(companies: list[dict], snapshot_id: str):
         if errors:
             logging.error(f"❌ insert_companies_into_bigquery errors: {errors}")
             raise GoogleAPIError(f"BigQuery insert errors: {errors}")
-        logging.info(f"✅ Successfully inserted {len(rows_to_insert)} companies into {table_id}")
+        logging.info(f"✅ Successfully inserted {len(rows_to_insert)} companies into `{table_id}`")
     except GoogleAPIError as e:
-        logging.error(f"❌ Failed to insert companies into {table_id}: {e}")
+        logging.error(f"❌ Failed to insert companies into `{table_id}`: {e}")
         raise
 
 
 def insert_deals_into_bigquery(deals: list[dict], snapshot_id: str):
     """
     Insert a list of HubSpot‐deal dictionaries into the table `hs_deals`.
-    If `deals` is a nested list, flatten one level first.
-    Each `deal` dict should have:
-      - 'id' (deal_id)
-      - 'properties' (dict of property_name → value)
-      - 'associations' → {'companies': {'results': [ { 'id': ... }, … ] } }
+    Automatically includes:
+      - deal_id (from deal["id"])
+      - all other columns in HUBSPOT_DEAL_FIELD_MAP (from deal["properties"])
+      - associated_company_id (first in associations, if any)
+      - timestamp (from properties['createdate'])
+      - snapshot_id
     """
     # 1) Flatten one level if needed
     if deals and isinstance(deals[0], list):
@@ -153,18 +154,22 @@ def insert_deals_into_bigquery(deals: list[dict], snapshot_id: str):
         associations = deal.get("associations", {}).get("companies", {}).get("results", [])
         associated_company_id = associations[0]["id"] if associations else None
 
-        row = {
-            "deal_id": deal.get("id"),
-            "deal_name": props.get("dealname"),
-            "deal_stage": props.get("dealstage"),
-            "deal_type": props.get("dealtype"),
-            "amount": float(props.get("amount") or 0),
-            "owner_id": props.get("hubspot_owner_id"),
-            "associated_company_id": associated_company_id,
-            "snapshot_id": snapshot_id,
-            # If you have a timestamp field in your schema, adjust accordingly. For example:
-            # "timestamp": props.get("createdate")
-        }
+        row: dict[str, any] = {}
+
+        # 1.A) Special‐case the deal_id (top‐level "id")
+        row["deal_id"] = deal.get("id")
+
+        # 1.B) Loop over every other mapped column
+        for col_name, hs_prop_name in HUBSPOT_DEAL_FIELD_MAP.items():
+            if hs_prop_name == "id":
+                continue
+            row[col_name] = props.get(hs_prop_name)
+
+        # 2) Add associated_company_id, timestamp, snapshot_id
+        row["associated_company_id"] = associated_company_id
+        row["timestamp"]             = props.get("createdate")
+        row["snapshot_id"]           = snapshot_id
+
         rows_to_insert.append(row)
 
     if not rows_to_insert:
@@ -172,7 +177,7 @@ def insert_deals_into_bigquery(deals: list[dict], snapshot_id: str):
         return
 
     table_id = f"{BIGQUERY_PROJECT_ID}.{DATASET_ID}.hs_deals"
-    logging.info(f"Inserting {len(rows_to_insert)} deals into table: {table_id}")
+    logging.info(f"⏳ Inserting {len(rows_to_insert)} deals into `{table_id}`…")
 
     client = bigquery.Client(project=BIGQUERY_PROJECT_ID)
     try:
@@ -180,7 +185,7 @@ def insert_deals_into_bigquery(deals: list[dict], snapshot_id: str):
         if errors:
             logging.error(f"❌ insert_deals_into_bigquery errors: {errors}")
             raise GoogleAPIError(f"BigQuery insert errors: {errors}")
-        logging.info(f"✅ Successfully inserted {len(rows_to_insert)} deals into {table_id}")
+        logging.info(f"✅ Successfully inserted {len(rows_to_insert)} deals into `{table_id}`")
     except GoogleAPIError as e:
-        logging.error(f"❌ Failed to insert deals into {table_id}: {e}")
+        logging.error(f"❌ Failed to insert deals into `{table_id}`: {e}")
         raise
