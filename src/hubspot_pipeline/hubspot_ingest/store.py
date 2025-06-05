@@ -1,41 +1,40 @@
-# --- store.py ---
-# Write to BigQuery
+# src/hubspot_pipeline/hubspot_ingest/store.py
+
 import logging
 import os
 from google.cloud import bigquery
 from google.api_core.exceptions import NotFound
+from datetime import datetime
 
 def store_to_bigquery(rows, table_name, dataset=None):
+    """
+    Write rows to BigQuery with comprehensive logging
+    
+    Args:
+        rows: List of dictionaries to insert
+        table_name: Name of the BigQuery table
+        dataset: Dataset name (uses env var if not provided)
+    """
+    logger = logging.getLogger('hubspot.store')
+    
     if not rows:
-        logging.info(f"No data for {table_name}")
+        logger.info(f"📊 No data to store for {table_name}")
         return
 
+    start_time = datetime.utcnow()
     client = bigquery.Client()
-    logging.info(f"Preparing to store {len(rows)} rows into '{dataset}.{table_name}'")
+    
+    # Determine dataset
     dataset = dataset or os.getenv("BIGQUERY_DATASET_ID", "hubspot_dev")
-    full_table = f"{client.project}.{dataset}.{table_name}"
+    project_id = client.project
+    full_table = f"{project_id}.{dataset}.{table_name}"
+    
+    logger.info(f"💾 Preparing to store {len(rows)} rows into '{full_table}'")
+    
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(f"BigQuery project: {project_id}")
+        logger.debug(f"Dataset: {dataset}")
+        logger.debug(f"Table: {table_name}")
+        logger.debug(f"Full table reference: {full_table}")
 
-    # Schema from first row
-    sample = rows[0]
-    schema = [
-        bigquery.SchemaField(k, _bq_type(v)) for k, v in sample.items()
-    ]
-
-    try:
-        client.get_table(full_table)
-    except NotFound:
-        logging.info(f"Table {full_table} not found. Creating new table.")
-        client.create_table(bigquery.Table(full_table, schema=schema))
-
-    errors = client.insert_rows_json(full_table, rows)
-    logging.info(f"Inserted {len(rows)} rows into {full_table}")
-    if errors:
-        logging.error(f"Failed to insert rows into {full_table}: {errors}")
-        raise RuntimeError(errors)
-
-
-def _bq_type(v):
-    if isinstance(v, int): return "INTEGER"
-    if isinstance(v, float): return "FLOAT"
-    if isinstance(v, bool): return "BOOLEAN"
-    return "STRING"
+    #

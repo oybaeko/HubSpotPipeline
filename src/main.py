@@ -5,37 +5,34 @@ from flask import Request
 from hubspot_pipeline.hubspot_ingest.config_loader import init_env
 from hubspot_pipeline.hubspot_ingest.main import main as ingest_main
 
-# Configure production-ready logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(module)s]: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
-
 def main(request: Request):
     """
     Cloud Function entry point for HTTP triggers
     """
-    logging.info("🌐 Cloud Function HTTP trigger received")
+    # Basic logging setup (will be reconfigured by init_env)
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger('hubspot.cloudfunction')
     
-    # Initialize environment (handles both local and GCP automatically)
-    try:
-        init_env()
-    except Exception as e:
-        logging.error(f"❌ Failed to initialize environment: {e}")
-        return f"Configuration error: {e}", 500
+    logger.info("🌐 Cloud Function HTTP trigger received")
     
-    # Parse request data
+    # Parse request data first to get any log level override
     try:
         data = request.get_json(silent=True) or {}
-        logging.info(f"📦 Parsed request data: {data}")
+        logger.info(f"📦 Parsed request data keys: {list(data.keys())}")
+        
+        # Log request details at debug level (will be visible if debug enabled)
+        if logger.isEnabledFor(logging.DEBUG):
+            safe_data = {k: v for k, v in data.items() if k not in ['api_key', 'token']}
+            logger.debug(f"Full request data: {safe_data}")
     except Exception as e:
-        logging.warning(f"⚠️ Failed to parse JSON body: {e}")
+        logger.warning(f"Failed to parse JSON body: {e}")
         data = {}
     
-    # Call the ingest main function
+    # Call the ingest main function (it will reconfigure logging)
     try:
-        return ingest_main(event=data)
+        result = ingest_main(event=data)
+        logger.info(f"✅ Ingest completed successfully")
+        return result
     except Exception as e:
-        logging.error(f"❌ Ingest failed: {e}", exc_info=True)
+        logger.error(f"❌ Ingest failed: {e}", exc_info=True)
         return f"Ingest error: {e}", 500
