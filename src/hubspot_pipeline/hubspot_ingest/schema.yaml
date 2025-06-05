@@ -1,0 +1,37 @@
+company:
+  object_name: hs_companies                 # BigQuery table name
+  api_object: companies                     # HubSpot SDK object → client.crm.companies
+  id_field: company_id                      # Column to use for HubSpot ID
+  fetch_mode: list                          # (search not implemented yet)
+  fields:
+    id: company_id
+    name: company_name
+    lifecyclestage: lifecycle_stage
+    hs_lead_status: lead_status
+    hubspot_owner_id: hubspot_owner_id
+    type: company_type
+    development_category: development_category
+    hiring_developers: hiring_developers
+    inhouse_developers: inhouse_developers
+    proff_likviditetsgrad: proff_likviditetsgrad
+    proff_link: proff_link
+    proff_lonnsomhet: proff_lonnsomhet
+    proff_soliditet: proff_soliditet
+
+deal:
+  object_name: hs_deals
+  api_object: deals
+  id_field: deal_id
+  fetch_mode: list
+  fields:
+    id: deal_id
+    dealname: deal_name
+    dealstage: deal_stage
+    dealtype: deal_type
+    amount: amount
+    hubspot_owner_id: owner_id
+  associations:
+    companies:
+      field_name: associated_company_id
+      association_type: single
+

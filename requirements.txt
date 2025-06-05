@@ -1,5 +1,0 @@
-requests
-google-cloud-bigquery
-python-dotenv
-flask
-functions-framework
