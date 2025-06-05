@@ -3,3 +3,7 @@ google-cloud-secret-manager>=2.0.0
 google-cloud-logging>=3.0.0
 requests>=2.25.0
 functions-framework
+google-cloud-bigquery>=3.0.0
+hubspot-api-client>=7.0.0
+python-dotenv>=0.19.0
+pyyaml>=6.0

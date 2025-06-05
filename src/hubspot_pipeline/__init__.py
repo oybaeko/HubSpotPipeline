@@ -3,30 +3,15 @@
 HubSpotPipeline package exports.
 """
 
-# ─── HubSpot API Fetchers ──────────────────────────────────────────────────────
-from .fetch_hubspot_data import (
-    fetch_companies,
-    fetch_deals,
-    fetch_all_deals_with_company,
-    fetch_owners,
-)
+# Only import the new ingest modules, not the old fetch modules
+# This avoids the HUBSPOT_API_KEY check that happens at import time
 
-# ─── BigQuery Utilities ───────────────────────────────────────────────────────
-from .bigquery_utils import (
-    insert_companies_into_bigquery,
-    insert_deals_into_bigquery,
-    recreate_table,
-)
+# ─── New Ingest Pipeline (hubspot_ingest) ─────────────────────────────────────
+# These are the modules we actually use now
+from .hubspot_ingest.config_loader import init_env, load_schema, get_config
+from .hubspot_ingest.main import main as ingest_main
 
-# ─── Snapshot & Processing Pipeline ───────────────────────────────────────────
-from .process_snapshot import process_snapshot
-from .populate_deal_stage_reference import populate_deal_stage_reference
-from .populate_stage_mapping import populate_stage_mapping
-from .recreate import recreate_all_snapshots
-#from .snapshot_runner import run_snapshot_and_process
-from .populate_owners import overwrite_owners_into_bigquery
-
-# ─── Schema Definitions & Field Maps ──────────────────────────────────────────
+# ─── Schema Definitions & Field Maps (still needed) ───────────────────────────
 from .schema import (
     SCHEMA_COMPANIES,
     HUBSPOT_COMPANY_FIELD_MAP,
@@ -41,23 +26,16 @@ from .schema import (
     SCHEMA_PIPELINE_SCORE_HISTORY,
 )
 
+# Note: Removed imports of old fetch_hubspot_data and bigquery_utils modules
+# to avoid the HUBSPOT_API_KEY import-time check that causes deployment to fail.
+# These modules can still be imported directly if needed for the old pipeline.
+
 __all__ = [
-    # fetchers
-    "fetch_companies",
-    "fetch_deals",
-    "fetch_all_deals_with_company",
-    "fetch_owners",
-    # BigQuery
-    "insert_companies_into_bigquery",
-    "overwrite_owners_into_bigquery",
-    "insert_deals_into_bigquery",
-    "recreate_table",
-    # pipeline
-    "process_snapshot",
-    "populate_deal_stage_reference",
-    "populate_stage_mapping",
-    "recreate_all_snapshots",
-    "run_snapshot_pipeline",
+    # New ingest pipeline
+    "init_env",
+    "load_schema", 
+    "get_config",
+    "ingest_main",
     # schemas & maps
     "SCHEMA_COMPANIES",
     "HUBSPOT_COMPANY_FIELD_MAP",
