@@ -1,28 +1,60 @@
-# hubspot-scoring/processor.py
-# Extracted from your existing process_snapshot.py
+# src/hubspot_pipeline/scoring/processor.py
 
 import logging
 import time
+import os
 from datetime import datetime
 from google.cloud import bigquery
 from google.api_core.exceptions import GoogleAPIError
-from config import get_config
 
 def process_snapshot(snapshot_id: str):
     """
     Master function: processes a snapshot by running unit-score and score-history jobs in sequence.
-    Extracted from your existing process_snapshot.py
+    
+    Args:
+        snapshot_id: The identifier for the snapshot to process
+        
+    Returns:
+        dict: Processing results with record counts and timing
     """
     logger = logging.getLogger('hubspot.scoring.processor')
     logger.info(f"🔄 Starting full processing for snapshot: {snapshot_id}")
     
+    start_time = datetime.utcnow()
+    
     try:
-        process_unit_score_for_snapshot(snapshot_id)
-        process_score_history_for_snapshot(snapshot_id)
+        # Step 1: Process unit scores
+        unit_results = process_unit_score_for_snapshot(snapshot_id)
+        
+        # Step 2: Process score history
+        history_results = process_score_history_for_snapshot(snapshot_id)
+        
+        total_time = (datetime.utcnow() - start_time).total_seconds()
+        
+        results = {
+            'status': 'success',
+            'snapshot_id': snapshot_id,
+            'unit_records': unit_results.get('records', 0),
+            'history_records': history_results.get('records', 0),
+            'processing_time_seconds': total_time
+        }
+        
         logger.info(f"✅ Completed full processing for snapshot: {snapshot_id}")
+        logger.info(f"📊 Results: {unit_results.get('records', 0)} unit records, {history_results.get('records', 0)} history records")
+        logger.info(f"⏱️ Total time: {total_time:.2f}s")
+        
+        return results
+        
     except Exception as e:
+        total_time = (datetime.utcnow() - start_time).total_seconds()
         logger.error(f"❌ Error during process_snapshot({snapshot_id}): {e}", exc_info=True)
-        raise
+        
+        return {
+            'status': 'error',
+            'snapshot_id': snapshot_id,
+            'error': str(e),
+            'processing_time_seconds': total_time
+        }
 
 def process_unit_score_for_snapshot(snapshot_id: str):
     """
@@ -33,17 +65,20 @@ def process_unit_score_for_snapshot(snapshot_id: str):
     
     Args:
         snapshot_id (str): The identifier for the snapshot to process.
-    
-    Raises:
-        GoogleAPIError: If the BigQuery job fails.
+        
+    Returns:
+        dict: Results with record count and timing
     """
     logger = logging.getLogger('hubspot.scoring.processor')
-    logger.info(f"🔹 Entering process_unit_score_for_snapshot({snapshot_id})")
+    logger.info(f"🔹 Processing unit scores for snapshot: {snapshot_id}")
 
-    config = get_config()
-    client = bigquery.Client(project=config['BIGQUERY_PROJECT_ID'])
+    start_time = datetime.utcnow()
+    
+    client = bigquery.Client()
+    project_id = os.getenv('BIGQUERY_PROJECT_ID')
+    dataset_id = os.getenv('BIGQUERY_DATASET_ID')
 
-    # Build the SQL string (from your existing code)
+    # Build the SQL query
     query = f"""
     -- Step 1: Filter companies for this snapshot
     WITH companies AS (
@@ -53,7 +88,7 @@ def process_unit_score_for_snapshot(snapshot_id: str):
         company_id,
         hubspot_owner_id,
         snapshot_id
-      FROM `{config['BIGQUERY_PROJECT_ID']}.{config['BIGQUERY_DATASET_ID']}.hs_companies`
+      FROM `{project_id}.{dataset_id}.hs_companies`
       WHERE snapshot_id = @snapshot_id
     ),
     -- Step 2: Filter open deals for this snapshot
@@ -63,11 +98,11 @@ def process_unit_score_for_snapshot(snapshot_id: str):
         deal_id,
         associated_company_id,
         snapshot_id
-      FROM `{config['BIGQUERY_PROJECT_ID']}.{config['BIGQUERY_DATASET_ID']}.hs_deals`
+      FROM `{project_id}.{dataset_id}.hs_deals`
       WHERE snapshot_id = @snapshot_id
         AND deal_stage NOT IN (
             SELECT stage_id
-            FROM `{config['BIGQUERY_PROJECT_ID']}.{config['BIGQUERY_DATASET_ID']}.hs_deal_stage_reference`
+            FROM `{project_id}.{dataset_id}.hs_deal_stage_reference`
             WHERE is_closed = TRUE
         )
     ),
@@ -102,20 +137,19 @@ def process_unit_score_for_snapshot(snapshot_id: str):
         sm.stage_level,
         sm.adjusted_score
       FROM joined j
-      LEFT JOIN `{config['BIGQUERY_PROJECT_ID']}.{config['BIGQUERY_DATASET_ID']}.hs_stage_mapping` sm
+      LEFT JOIN `{project_id}.{dataset_id}.hs_stage_mapping` sm
         ON sm.combined_stage = j.combined_stage
     )
     SELECT * FROM scored
     """
 
     logger.info("🔹 Submitting BigQuery job for unit scores...")
-    logger.debug(f"SQL for unit score (truncated to 200 chars):\n{query[:200]}...")
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
             bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id)
         ],
-        destination=f"{config['BIGQUERY_PROJECT_ID']}.{config['BIGQUERY_DATASET_ID']}.hs_pipeline_units_snapshot",
+        destination=f"{project_id}.{dataset_id}.hs_pipeline_units_snapshot",
         write_disposition="WRITE_APPEND",
     )
 
@@ -123,40 +157,54 @@ def process_unit_score_for_snapshot(snapshot_id: str):
         job = client.query(query, job_config=job_config)
         logger.info(f"   • BigQuery job ID (unit score): {job.job_id}")
         job.result()  # Wait for completion
-        logger.info(f"✅ Unit-score job completed and data appended to `hs_pipeline_units_snapshot`")
+        
+        # Get number of rows processed
+        rows_processed = job.num_dml_affected_rows or 0
+        processing_time = (datetime.utcnow() - start_time).total_seconds()
+        
+        logger.info(f"✅ Unit-score job completed: {rows_processed} records in {processing_time:.2f}s")
+        
+        return {
+            'status': 'success',
+            'records': rows_processed,
+            'processing_time_seconds': processing_time
+        }
+        
     except GoogleAPIError as e:
+        processing_time = (datetime.utcnow() - start_time).total_seconds()
         logger.error(f"❌ BigQuery unit-score job failed: {e}", exc_info=True)
-        raise
-
-    logger.info(f"🔹 Exiting process_unit_score_for_snapshot({snapshot_id})")
+        raise RuntimeError(f"Unit score processing failed: {e}")
 
 def process_score_history_for_snapshot(snapshot_id: str):
     """
     Processes and appends score history data for a given snapshot to the BigQuery score history table.
 
     Steps:
-      1) Sleep 10 seconds to allow streaming buffer flush (if any),
+      1) Sleep briefly to allow any streaming buffer to settle,
       2) Aggregate pipeline_units rows by owner & combined_stage,
       3) Append results to the hs_pipeline_score_history table.
 
     Args:
         snapshot_id (str): The unique identifier for the snapshot to process.
-
-    Raises:
-        GoogleAPIError: If the BigQuery job fails.
+        
+    Returns:
+        dict: Results with record count and timing
     """
     logger = logging.getLogger('hubspot.scoring.processor')
-    logger.info(f"🔹 Entering process_score_history_for_snapshot({snapshot_id})")
+    logger.info(f"🔹 Processing score history for snapshot: {snapshot_id}")
 
-    # 1) Optional wait
-    wait_secs = 10
-    logger.info(f"   • Waiting {wait_secs}s to ensure pipeline_units data is available …")
+    start_time = datetime.utcnow()
+    
+    # Brief wait to ensure data availability
+    wait_secs = 5
+    logger.info(f"   • Waiting {wait_secs}s to ensure pipeline_units data is available...")
     time.sleep(wait_secs)
 
-    config = get_config()
-    client = bigquery.Client(project=config['BIGQUERY_PROJECT_ID'])
+    client = bigquery.Client()
+    project_id = os.getenv('BIGQUERY_PROJECT_ID')
+    dataset_id = os.getenv('BIGQUERY_DATASET_ID')
 
-    # Build the SQL string
+    # Build the aggregation SQL
     query = f"""
     SELECT
       snapshot_id,
@@ -165,19 +213,18 @@ def process_score_history_for_snapshot(snapshot_id: str):
       COUNT(DISTINCT company_id) AS num_companies,
       SUM(adjusted_score) AS total_score,
       MAX(snapshot_timestamp) AS snapshot_timestamp
-    FROM `{config['BIGQUERY_PROJECT_ID']}.{config['BIGQUERY_DATASET_ID']}.hs_pipeline_units_snapshot`
+    FROM `{project_id}.{dataset_id}.hs_pipeline_units_snapshot`
     WHERE snapshot_id = @snapshot_id
     GROUP BY snapshot_id, owner_id, combined_stage
     """
 
-    logger.info("🔹 Submitting BigQuery job for score history …")
-    logger.debug(f"SQL for score history (truncated to 200 chars):\n{query[:200]}...")
+    logger.info("🔹 Submitting BigQuery job for score history...")
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
             bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id)
         ],
-        destination=f"{config['BIGQUERY_PROJECT_ID']}.{config['BIGQUERY_DATASET_ID']}.hs_pipeline_score_history",
+        destination=f"{project_id}.{dataset_id}.hs_pipeline_score_history",
         write_disposition="WRITE_APPEND",
     )
 
@@ -185,9 +232,20 @@ def process_score_history_for_snapshot(snapshot_id: str):
         job = client.query(query, job_config=job_config)
         logger.info(f"   • BigQuery job ID (score history): {job.job_id}")
         job.result()  # Wait for completion
-        logger.info(f"✅ Score-history job completed and data appended to `hs_pipeline_score_history`")
+        
+        # Get number of rows processed
+        rows_processed = job.num_dml_affected_rows or 0
+        processing_time = (datetime.utcnow() - start_time).total_seconds()
+        
+        logger.info(f"✅ Score-history job completed: {rows_processed} records in {processing_time:.2f}s")
+        
+        return {
+            'status': 'success',
+            'records': rows_processed,
+            'processing_time_seconds': processing_time
+        }
+        
     except GoogleAPIError as e:
+        processing_time = (datetime.utcnow() - start_time).total_seconds()
         logger.error(f"❌ BigQuery score-history job failed: {e}", exc_info=True)
-        raise
-
-    logger.info(f"🔹 Exiting process_score_history_for_snapshot({snapshot_id})")
+        raise RuntimeError(f"Score history processing failed: {e}")

@@ -1,24 +1,23 @@
-# hubspot-scoring/stage_mapping.py
-# Extracted from your existing populate_stage_mapping.py
+# src/hubspot_pipeline/scoring/stage_mapping.py
 
 import logging
+import os
+from typing import List, Tuple
 from google.cloud import bigquery
-from config import get_config
 
-def populate_stage_mapping():
-    """
-    Populate the hs_stage_mapping table with hardcoded stage mapping logic
-    Extracted from your existing populate_stage_mapping.py
-    """
-    logger = logging.getLogger('hubspot.scoring.stage_mapping')
-    logger.info("🔄 Populating stage mapping table")
-    
-    config = get_config()
-    client = bigquery.Client(project=config['BIGQUERY_PROJECT_ID'])
-    table_ref = f"{config['BIGQUERY_PROJECT_ID']}.{config['BIGQUERY_DATASET_ID']}.hs_stage_mapping"
+# Stage mapping schema
+STAGE_MAPPING_SCHEMA: List[Tuple[str, str]] = [
+    ("lifecycle_stage", "STRING"),
+    ("lead_status",     "STRING"),
+    ("deal_stage",      "STRING"),
+    ("combined_stage",  "STRING"),
+    ("stage_level",     "INTEGER"),
+    ("adjusted_score",  "FLOAT"),
+]
 
-    # Your existing stage mapping data
-    stage_mapping = [
+def get_stage_mapping_data():
+    """Get the hardcoded stage mapping configuration"""
+    return [
         # Lead lifecycle stages
         {"lifecycle_stage": "lead", "lead_status": "new", "deal_stage": None, "combined_stage": "lead/new", "stage_level": 1, "adjusted_score": 1.0},
         {"lifecycle_stage": "lead", "lead_status": "restart", "deal_stage": None, "combined_stage": "lead/restart", "stage_level": 1, "adjusted_score": 1.0},
@@ -43,10 +42,60 @@ def populate_stage_mapping():
         {"lifecycle_stage": "disqualified", "lead_status": None, "deal_stage": None, "combined_stage": "disqualified", "stage_level": -1, "adjusted_score": 0.0}
     ]
 
+def ensure_stage_mapping_table_exists():
+    """Ensure the stage mapping table exists with correct schema"""
+    logger = logging.getLogger('hubspot.scoring.stage_mapping')
+    
+    client = bigquery.Client()
+    project_id = os.getenv('BIGQUERY_PROJECT_ID')
+    dataset_id = os.getenv('BIGQUERY_DATASET_ID')
+    table_name = "hs_stage_mapping"
+    full_table = f"{project_id}.{dataset_id}.{table_name}"
+    
     try:
+        existing_table = client.get_table(full_table)
+        logger.debug(f"✅ Stage mapping table {full_table} exists")
+    except Exception:
+        logger.info(f"📝 Creating stage mapping table {full_table}")
+        
+        # Convert schema to BigQuery schema fields
+        bq_schema = []
+        for col_name, col_type in STAGE_MAPPING_SCHEMA:
+            bq_schema.append(bigquery.SchemaField(col_name, col_type))
+        
+        try:
+            table = bigquery.Table(full_table, schema=bq_schema)
+            client.create_table(table)
+            logger.info(f"✅ Created stage mapping table {full_table}")
+        except Exception as e:
+            logger.error(f"❌ Failed to create stage mapping table: {e}")
+            raise RuntimeError(f"Failed to create stage mapping table: {e}")
+
+def populate_stage_mapping():
+    """
+    Populate the hs_stage_mapping table with scoring configuration
+    
+    Returns:
+        int: Number of stage mapping records loaded
+    """
+    logger = logging.getLogger('hubspot.scoring.stage_mapping')
+    logger.info("🔄 Populating stage mapping table")
+    
+    try:
+        client = bigquery.Client()
+        project_id = os.getenv('BIGQUERY_PROJECT_ID')
+        dataset_id = os.getenv('BIGQUERY_DATASET_ID')
+        table_ref = f"{project_id}.{dataset_id}.hs_stage_mapping"
+
+        # Ensure table exists
+        ensure_stage_mapping_table_exists()
+
+        # Get stage mapping data
+        stage_mapping = get_stage_mapping_data()
+
         # Recreate table (truncate and reload)
         logger.info(f"🗑️ Truncating table {table_ref}")
-        client.query(f"TRUNCATE `{table_ref}`").result()
+        client.query(f"TRUNCATE TABLE `{table_ref}`").result()
 
         # Load new data
         logger.info(f"⏳ Loading {len(stage_mapping)} stage mapping records")
@@ -55,6 +104,7 @@ def populate_stage_mapping():
         job.result()
 
         logger.info(f"✅ Loaded {len(stage_mapping)} rows into {table_ref}")
+        return len(stage_mapping)
         
     except Exception as e:
         logger.error(f"❌ Failed to populate stage mapping: {e}")

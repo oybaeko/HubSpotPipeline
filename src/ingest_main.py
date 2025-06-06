@@ -1,4 +1,4 @@
-# src/main.py
+# src/ingest_main.py
 
 import logging
 from flask import Request
@@ -7,13 +7,19 @@ from hubspot_pipeline.hubspot_ingest.main import main as ingest_main
 
 def main(request: Request):
     """
-    Cloud Function entry point for HTTP triggers
+    Ingest Cloud Function entry point for HTTP triggers
+    
+    Args:
+        request: Flask Request object containing HTTP request data
+        
+    Returns:
+        tuple: (response_data, status_code)
     """
     # Basic logging setup (will be reconfigured by init_env)
     logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger('hubspot.cloudfunction')
+    logger = logging.getLogger('hubspot.ingest.cloudfunction')
     
-    logger.info("🌐 Cloud Function HTTP trigger received")
+    logger.info("🌐 Ingest Cloud Function HTTP trigger received")
     
     # Parse request data first to get any log level override
     try:

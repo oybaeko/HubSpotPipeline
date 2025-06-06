@@ -34,11 +34,18 @@ def store_to_bigquery(rows, table_name, dataset=None):
         return
 
     start_time = datetime.utcnow()
-    client = bigquery.Client()
+    
+    # Use explicit project ID to avoid client project ID mismatch
+    project_id = os.getenv("BIGQUERY_PROJECT_ID")
+    if not project_id:
+        logger.error("BIGQUERY_PROJECT_ID environment variable not set")
+        raise RuntimeError("BIGQUERY_PROJECT_ID environment variable not set")
+    
+    # Create client with explicit project ID
+    client = bigquery.Client(project=project_id)
     
     # Determine dataset
     dataset = dataset or os.getenv("BIGQUERY_DATASET_ID", "hubspot_dev")
-    project_id = client.project
     full_table = f"{project_id}.{dataset}.{table_name}"
     
     logger.info(f"💾 Preparing to store {len(rows)} rows into '{full_table}'")
@@ -64,12 +71,10 @@ def store_to_bigquery(rows, table_name, dataset=None):
     schema = schema_fields
     logger.info(f"📋 Generated schema with {len(schema)} fields")
 
-    # Check if table exists, create if needed
-    table_exists = False
+    # Check if table exists (should exist due to pre-flight check, but verify)
     try:
         existing_table = client.get_table(full_table)
-        table_exists = True
-        logger.debug(f"✅ Table {full_table} exists")
+        logger.debug(f"✅ Table {full_table} exists and ready")
         
         # Verify schema compatibility if in debug mode
         if logger.isEnabledFor(logging.DEBUG):
@@ -90,11 +95,18 @@ def store_to_bigquery(rows, table_name, dataset=None):
                 logger.debug("Schema matches existing table")
                 
     except NotFound:
-        logger.info(f"📝 Table {full_table} not found. Creating new table")
+        # This shouldn't happen due to pre-flight check, but handle gracefully
+        logger.warning(f"⚠️ Table {full_table} not found despite pre-flight check")
+        logger.info(f"📝 Creating table {full_table}")
         try:
             table = bigquery.Table(full_table, schema=schema)
             client.create_table(table)
             logger.info(f"✅ Created table {full_table}")
+            
+            # Verify table is ready
+            from .table_checker import verify_table_readiness
+            if not verify_table_readiness(table_name):
+                raise RuntimeError(f"Table {table_name} not ready after creation")
             
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(f"Created table with schema: {[f.name + ':' + f.field_type for f in schema]}")
@@ -110,7 +122,7 @@ def store_to_bigquery(rows, table_name, dataset=None):
     
     for i, row in enumerate(rows):
         try:
-            # Clean and validate row data
+            # Clean and validate row data with consistent type conversion
             clean_row = {}
             for key, value in row.items():
                 # Handle None values and type conversions
@@ -122,7 +134,11 @@ def store_to_bigquery(rows, table_name, dataset=None):
                     if logger.isEnabledFor(logging.DEBUG) and i == 0:
                         logger.debug(f"Converted complex type {key}: {type(value).__name__} -> STRING")
                 else:
-                    clean_row[key] = value
+                    # Ensure consistent string conversion for ID fields
+                    if key.endswith('_id') and value is not None:
+                        clean_row[key] = str(value)  # Force string conversion for ID fields
+                    else:
+                        clean_row[key] = value
             
             processed_rows.append(clean_row)
             
@@ -189,6 +205,7 @@ def store_to_bigquery(rows, table_name, dataset=None):
 def upsert_to_bigquery(rows, table_name, id_field, dataset=None):
     """
     Upsert rows to BigQuery - update existing, add new, keep deleted
+    CREATES TABLE if it doesn't exist, then performs upsert
     
     Args:
         rows: List of dictionaries to upsert
@@ -204,22 +221,66 @@ def upsert_to_bigquery(rows, table_name, id_field, dataset=None):
 
     client = bigquery.Client()
     dataset = dataset or os.getenv("BIGQUERY_DATASET_ID", "hubspot_dev")
-    project_id = client.project
+    # Use explicit project ID to avoid client project ID mismatch
+    project_id = os.getenv("BIGQUERY_PROJECT_ID") or client.project
+    full_table = f"{project_id}.{dataset}.{table_name}"
     
     logger.info(f"🔄 Upserting {len(rows)} rows into {table_name} (key: {id_field})")
     
     try:
+        # CRITICAL FIX: Ensure consistent data types for all rows
+        processed_rows = []
+        for row in rows:
+            processed_row = {}
+            for key, value in row.items():
+                if value is None:
+                    processed_row[key] = None
+                elif key.endswith('_id') and value is not None:
+                    # Force all ID fields to be strings for consistency
+                    processed_row[key] = str(value)
+                elif isinstance(value, bool):
+                    # Ensure booleans stay as booleans
+                    processed_row[key] = value
+                elif isinstance(value, (int, float)) and not key.endswith('_id'):
+                    # Keep numeric fields as numbers (except IDs)
+                    processed_row[key] = value
+                else:
+                    # Convert everything else to string
+                    processed_row[key] = str(value) if value is not None else None
+            processed_rows.append(processed_row)
+        
+        # Get schema from sample row (after processing)
+        sample = processed_rows[0]
+        schema = []
+        for key, value in sample.items():
+            # Use consistent type determination
+            if key.endswith('_id'):
+                field_type = "STRING"  # Force all IDs to be STRING
+            else:
+                field_type = _bq_type(value)
+            schema.append(bigquery.SchemaField(key, field_type))
+        
+        # Check if target table exists, create if needed
+        try:
+            existing_table = client.get_table(full_table)
+            logger.debug(f"✅ Target table {full_table} exists")
+        except NotFound:
+            logger.info(f"📝 Target table {full_table} not found. Creating new table")
+            try:
+                table = bigquery.Table(full_table, schema=schema)
+                client.create_table(table)
+                logger.info(f"✅ Created target table {full_table}")
+                
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"Created table with schema: {[f.name + ':' + f.field_type for f in schema]}")
+            except Exception as e:
+                logger.error(f"❌ Failed to create target table {full_table}: {e}")
+                raise RuntimeError(f"Failed to create target table: {e}")
+        
         # Create temporary table
         temp_table_id = f"{project_id}.{dataset}.temp_{table_name}_{int(time.time())}"
         
         logger.debug(f"Creating temp table: {temp_table_id}")
-        
-        # Get schema from sample row
-        sample = rows[0]
-        schema = []
-        for key, value in sample.items():
-            field_type = _bq_type(value)
-            schema.append(bigquery.SchemaField(key, field_type))
         
         # Load data to temp table
         job_config = bigquery.LoadJobConfig(
@@ -227,10 +288,10 @@ def upsert_to_bigquery(rows, table_name, id_field, dataset=None):
             schema=schema
         )
         
-        job = client.load_table_from_json(rows, temp_table_id, job_config=job_config)
+        job = client.load_table_from_json(processed_rows, temp_table_id, job_config=job_config)
         job.result()
         
-        logger.debug(f"Loaded {len(rows)} rows to temp table")
+        logger.debug(f"Loaded {len(processed_rows)} rows to temp table")
         
         # Build field list for MERGE statement
         fields = [field.name for field in schema if field.name != id_field]
@@ -238,11 +299,11 @@ def upsert_to_bigquery(rows, table_name, id_field, dataset=None):
         insert_fields = [field.name for field in schema]
         insert_values = [f"source.{field}" for field in insert_fields]
         
-        # MERGE statement (upsert)
+        # MERGE statement (upsert) with explicit CAST to ensure type consistency
         merge_query = f"""
-        MERGE `{project_id}.{dataset}.{table_name}` AS target
+        MERGE `{full_table}` AS target
         USING `{temp_table_id}` AS source
-        ON target.{id_field} = source.{id_field}
+        ON CAST(target.{id_field} AS STRING) = CAST(source.{id_field} AS STRING)
         WHEN MATCHED THEN
           UPDATE SET {', '.join(update_assignments)}
         WHEN NOT MATCHED THEN
@@ -250,18 +311,34 @@ def upsert_to_bigquery(rows, table_name, id_field, dataset=None):
           VALUES ({', '.join(insert_values)})
         """
         
-        logger.debug(f"Executing MERGE for {table_name}")
+        logger.debug(f"Executing MERGE for {table_name} with type casting")
         merge_job = client.query(merge_query)
         merge_job.result()
         
-        # Clean up temp table
-        client.delete_table(temp_table_id)
+        # Clean up temp table with retry logic
+        try:
+            client.delete_table(temp_table_id, not_found_ok=True)
+            logger.debug(f"✅ Cleaned up temp table {temp_table_id}")
+        except Exception as cleanup_error:
+            logger.warning(f"⚠️ Failed to cleanup temp table {temp_table_id}: {cleanup_error}")
+            # Don't fail the whole operation for cleanup issues
         
-        logger.info(f"✅ Upserted {len(rows)} rows into {table_name}")
-        return len(rows)
+        logger.info(f"✅ Upserted {len(processed_rows)} rows into {table_name}")
+        return len(processed_rows)
         
     except Exception as e:
         logger.error(f"❌ Failed to upsert {table_name}: {e}")
+        
+        # Attempt cleanup even on failure
+        try:
+            if 'temp_table_id' in locals():
+                client.delete_table(temp_table_id, not_found_ok=True)
+                logger.debug(f"🧹 Emergency cleanup of temp table {temp_table_id}")
+        except Exception as cleanup_error:
+            logger.warning(f"⚠️ Failed emergency cleanup of temp table: {cleanup_error}")
+        
+        if 'processed_rows' in locals() and processed_rows:
+            logger.debug(f"Sample processed row: {processed_rows[0]}")
         raise
 
 
@@ -340,7 +417,8 @@ def register_snapshot_ingest(snapshot_id: str, triggered_by: str, data_counts: d
     try:
         client = bigquery.Client()
         dataset = os.getenv("BIGQUERY_DATASET_ID", "hubspot_dev")
-        project_id = client.project
+        # Use explicit project ID to avoid client project ID mismatch
+        project_id = os.getenv("BIGQUERY_PROJECT_ID") or client.project
         table_ref = f"{project_id}.{dataset}.hs_snapshot_registry"
         
         # Create comprehensive notes
@@ -382,7 +460,8 @@ def update_snapshot_registry_scoring(snapshot_id: str, status: str = "completed"
     try:
         client = bigquery.Client()
         dataset = os.getenv("BIGQUERY_DATASET_ID", "hubspot_dev")
-        project_id = client.project
+        # Use explicit project ID to avoid client project ID mismatch
+        project_id = os.getenv("BIGQUERY_PROJECT_ID") or client.project
         
         # Update the existing record
         update_query = f"""
@@ -413,6 +492,7 @@ def update_snapshot_registry_scoring(snapshot_id: str, status: str = "completed"
 def _bq_type(value):
     """
     Determine BigQuery field type from Python value
+    UPDATED: Improved type determination for consistency
     
     Args:
         value: Python value to analyze
