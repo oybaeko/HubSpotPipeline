@@ -38,6 +38,10 @@ def main(event=None, context=None):
     
     logger.info("🚀 HubSpot ingest started")
     
+    # Log trigger source for tracking
+    trigger_source = event.get("trigger_source", "unknown")
+    logger.info(f"🎯 Triggered by: {trigger_source}")
+    
     # Log request details
     if logger.isEnabledFor(logging.DEBUG):
         safe_event = {k: v for k, v in event.items() if k != 'api_key'}  # Don't log sensitive data
