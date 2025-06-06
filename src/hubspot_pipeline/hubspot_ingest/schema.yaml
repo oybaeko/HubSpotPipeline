@@ -34,4 +34,3 @@ deal:
     companies:
       field_name: associated_company_id
       association_type: single
-

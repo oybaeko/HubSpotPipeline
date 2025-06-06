@@ -4,6 +4,7 @@ import logging
 import os
 from hubspot import HubSpot
 from datetime import datetime
+from hubspot_pipeline.hubspot_ingest.store import store_to_bigquery, upsert_to_bigquery, publish_snapshot_completed_event, register_snapshot_ingest
 
 def get_client():
     """Get HubSpot client with API key from environment"""
@@ -181,3 +182,110 @@ def fetch_object(object_type, config, snapshot_id, limit=100):
             logger.debug(f"Record structure: {sample_keys}")
     
     return out
+
+def fetch_and_process_reference_data(snapshot_id):
+    """
+    Fetch and upsert reference data (owners and deal stages)
+    Uses existing logic from your working functions
+    
+    Returns:
+        dict: Reference data counts
+    """
+    logger = logging.getLogger('hubspot.reference')
+    
+    logger.info("🔄 Fetching reference data (owners and deal stages)")
+    
+    reference_counts = {}
+    
+    # ═══ FETCH OWNERS (using your existing working logic) ═══
+    try:
+        logger.info("📊 Fetching owners from HubSpot...")
+        
+        # Import your existing working fetch_owners function
+        from hubspot_pipeline.fetch_hubspot_data import fetch_owners
+        
+        raw_owners = fetch_owners()
+        
+        if raw_owners:
+            # Transform to BigQuery schema format
+            owners_rows = []
+            for owner in raw_owners:
+                row = {
+                    "owner_id": owner.get("id"),
+                    "email": owner.get("email"),
+                    "first_name": owner.get("firstName"),
+                    "last_name": owner.get("lastName"),
+                    "user_id": owner.get("userId"),
+                    "active": owner.get("active"),
+                    "timestamp": owner.get("updatedAt") or owner.get("createdAt"),
+                }
+                owners_rows.append(row)
+            
+            # Upsert to BigQuery
+            owners_count = upsert_to_bigquery(owners_rows, "hs_owners", "owner_id")
+            reference_counts['hs_owners'] = owners_count
+            logger.info(f"✅ Upserted {owners_count} owner records")
+        else:
+            logger.warning("⚠️ No owners data received from HubSpot")
+            reference_counts['hs_owners'] = 0
+            
+    except Exception as e:
+        logger.error(f"❌ Failed to fetch/upsert owners: {e}")
+        reference_counts['hs_owners'] = 0
+    
+    # ═══ FETCH DEAL STAGES (using your existing working logic) ═══
+    try:
+        logger.info("📊 Fetching deal stages from HubSpot...")
+        
+        # Import here to avoid circular imports
+        import requests
+        import os
+        
+        # Fetch deal pipelines (using your existing logic)
+        api_key = os.getenv('HUBSPOT_API_KEY')
+        url = "https://api.hubapi.com/crm/v3/pipelines/deals"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+
+        response = requests.get(url, headers=headers)
+        if response.status_code != 200:
+            logger.error(f"❌ Failed to fetch pipelines: {response.status_code} - {response.text}")
+            reference_counts['hs_deal_stage_reference'] = 0
+        else:
+            pipelines = response.json().get("results", [])
+            
+            # Transform to stage records (your existing logic)
+            records = []
+            for pipeline in pipelines:
+                pipeline_id = pipeline.get("id")
+                pipeline_label = pipeline.get("label")
+                for stage in pipeline.get("stages", []):
+                    records.append({
+                        "pipeline_id": pipeline_id,
+                        "pipeline_label": pipeline_label,
+                        "stage_id": stage.get("id"),
+                        "stage_label": stage.get("label"),
+                        "is_closed": stage.get("metadata", {}).get("isClosed", False),
+                        "probability": float(stage.get("metadata", {}).get("probability", 0)),
+                        "display_order": stage.get("displayOrder", 0)
+                    })
+            
+            logger.info(f"📊 Fetched {len(records)} deal stages from {len(pipelines)} pipelines")
+            
+            # Upsert to BigQuery
+            if records:
+                stages_count = upsert_to_bigquery(records, "hs_deal_stage_reference", "stage_id")
+                reference_counts['hs_deal_stage_reference'] = stages_count
+                logger.info(f"✅ Upserted {stages_count} deal stage records")
+            else:
+                logger.warning("⚠️ No deal stage records to upsert")
+                reference_counts['hs_deal_stage_reference'] = 0
+                
+    except Exception as e:
+        logger.error(f"❌ Failed to fetch/upsert deal stages: {e}")
+        reference_counts['hs_deal_stage_reference'] = 0
+    
+    logger.info(f"✅ Reference data processing complete: {reference_counts}")
+    return reference_counts

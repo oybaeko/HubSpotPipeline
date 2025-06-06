@@ -8,7 +8,7 @@ Updated to match the actual sheet names in your cleaned Excel file.
 from typing import List, Tuple, Dict
 
 # ─────────────────────────────────────────────────────────────────────────────────
-#   Companies Schema for Excel Import (matches main hs_companies)
+#   Companies Schema for Excel Import (matches main hs_companies) - REMOVED TIMESTAMP
 # ─────────────────────────────────────────────────────────────────────────────────
 
 EXCEL_COMPANIES_SCHEMA: List[Tuple[str, str]] = [
@@ -26,11 +26,11 @@ EXCEL_COMPANIES_SCHEMA: List[Tuple[str, str]] = [
     ("proff_lonnsomhet",       "STRING"),
     ("proff_soliditet",        "STRING"),
     ("snapshot_id",            "STRING"),
-    ("timestamp",              "TIMESTAMP"),
+    # REMOVED: ("timestamp", "TIMESTAMP"),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────────
-#   Deals Schema for Excel Import (matches main hs_deals)
+#   Deals Schema for Excel Import (matches main hs_deals) - REMOVED TIMESTAMP
 # ─────────────────────────────────────────────────────────────────────────────────
 
 EXCEL_DEALS_SCHEMA: List[Tuple[str, str]] = [
@@ -41,12 +41,12 @@ EXCEL_DEALS_SCHEMA: List[Tuple[str, str]] = [
     ("amount",                "FLOAT"),
     ("owner_id",              "STRING"),
     ("associated_company_id", "STRING"),
-    ("timestamp",             "TIMESTAMP"),
     ("snapshot_id",           "STRING"),
+    # REMOVED: ("timestamp", "TIMESTAMP"),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────────
-#   Owners Schema for Excel Import
+#   Owners Schema for Excel Import - REMOVED TIMESTAMP
 # ─────────────────────────────────────────────────────────────────────────────────
 
 EXCEL_OWNERS_SCHEMA: List[Tuple[str, str]] = [
@@ -56,18 +56,18 @@ EXCEL_OWNERS_SCHEMA: List[Tuple[str, str]] = [
     ("last_name",     "STRING"),
     ("user_id",       "STRING"),
     ("active",        "STRING"),
-    ("timestamp",     "TIMESTAMP"),
+    # REMOVED: ("timestamp", "TIMESTAMP"),
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────────
-#   Excel Column Mappings
+#   Excel Column Mappings - REMOVED TIMESTAMP MAPPINGS
 # ─────────────────────────────────────────────────────────────────────────────────
 
 EXCEL_COMPANY_FIELD_MAP: Dict[str, str] = {
     "Record ID": "company_id",
     "Company name": "company_name",
     "Company owner": "hubspot_owner_id",
-    "Create Date": "timestamp",
+    # REMOVED: "Create Date": "timestamp",
     "Type": "company_type",
     "Lifecycle Stage": "lifecycle_stage",
     "Lead Status": "lead_status",
@@ -83,7 +83,7 @@ EXCEL_DEAL_FIELD_MAP: Dict[str, str] = {
     "Amount": "amount",
     "Deal owner": "owner_id",
     "Associated company ID": "associated_company_id",
-    "Create date": "timestamp",
+    # REMOVED: "Create date": "timestamp",
     # Common variations
     "Dealname": "deal_name",
     "Dealstage": "deal_stage",
@@ -98,7 +98,7 @@ EXCEL_OWNERS_FIELD_MAP: Dict[str, str] = {
     "last_name": "last_name",
     "user_id": "user_id",
     "active": "active",
-    "timestamp": "timestamp",
+    # REMOVED: "timestamp": "timestamp",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────

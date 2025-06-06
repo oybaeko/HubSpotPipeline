@@ -2,9 +2,21 @@
 
 import logging
 import os
+import time
+import json
+from datetime import datetime
 from google.cloud import bigquery
 from google.api_core.exceptions import NotFound
-from datetime import datetime
+
+# Lazy import for Pub/Sub to avoid import errors in local testing
+def _get_pubsub_client():
+    """Lazy import of Pub/Sub client"""
+    try:
+        from google.cloud import pubsub_v1
+        return pubsub_v1.PublisherClient()
+    except ImportError as e:
+        logging.error("❌ google-cloud-pubsub not installed. Run: pip install google-cloud-pubsub")
+        raise ImportError("Missing dependency: google-cloud-pubsub") from e
 
 def store_to_bigquery(rows, table_name, dataset=None):
     """
@@ -172,6 +184,230 @@ def store_to_bigquery(rows, table_name, dataset=None):
             logger.debug(f"  Sample row keys: {list(processed_rows[0].keys()) if processed_rows else 'None'}")
         
         raise RuntimeError(f"BigQuery insertion failed: {e}")
+
+
+def upsert_to_bigquery(rows, table_name, id_field, dataset=None):
+    """
+    Upsert rows to BigQuery - update existing, add new, keep deleted
+    
+    Args:
+        rows: List of dictionaries to upsert
+        table_name: Name of the BigQuery table
+        id_field: Field name to use as unique key for upserts
+        dataset: Dataset name (uses env var if not provided)
+    """
+    logger = logging.getLogger('hubspot.store')
+    
+    if not rows:
+        logger.info(f"📊 No data to upsert for {table_name}")
+        return 0
+
+    client = bigquery.Client()
+    dataset = dataset or os.getenv("BIGQUERY_DATASET_ID", "hubspot_dev")
+    project_id = client.project
+    
+    logger.info(f"🔄 Upserting {len(rows)} rows into {table_name} (key: {id_field})")
+    
+    try:
+        # Create temporary table
+        temp_table_id = f"{project_id}.{dataset}.temp_{table_name}_{int(time.time())}"
+        
+        logger.debug(f"Creating temp table: {temp_table_id}")
+        
+        # Get schema from sample row
+        sample = rows[0]
+        schema = []
+        for key, value in sample.items():
+            field_type = _bq_type(value)
+            schema.append(bigquery.SchemaField(key, field_type))
+        
+        # Load data to temp table
+        job_config = bigquery.LoadJobConfig(
+            write_disposition="WRITE_TRUNCATE",
+            schema=schema
+        )
+        
+        job = client.load_table_from_json(rows, temp_table_id, job_config=job_config)
+        job.result()
+        
+        logger.debug(f"Loaded {len(rows)} rows to temp table")
+        
+        # Build field list for MERGE statement
+        fields = [field.name for field in schema if field.name != id_field]
+        update_assignments = [f"{field} = source.{field}" for field in fields]
+        insert_fields = [field.name for field in schema]
+        insert_values = [f"source.{field}" for field in insert_fields]
+        
+        # MERGE statement (upsert)
+        merge_query = f"""
+        MERGE `{project_id}.{dataset}.{table_name}` AS target
+        USING `{temp_table_id}` AS source
+        ON target.{id_field} = source.{id_field}
+        WHEN MATCHED THEN
+          UPDATE SET {', '.join(update_assignments)}
+        WHEN NOT MATCHED THEN
+          INSERT ({', '.join(insert_fields)})
+          VALUES ({', '.join(insert_values)})
+        """
+        
+        logger.debug(f"Executing MERGE for {table_name}")
+        merge_job = client.query(merge_query)
+        merge_job.result()
+        
+        # Clean up temp table
+        client.delete_table(temp_table_id)
+        
+        logger.info(f"✅ Upserted {len(rows)} rows into {table_name}")
+        return len(rows)
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to upsert {table_name}: {e}")
+        raise
+
+
+def publish_snapshot_completed_event(snapshot_id: str, data_counts: dict, reference_counts: dict):
+    """
+    Publish snapshot completion event to Pub/Sub
+    
+    Args:
+        snapshot_id: The snapshot identifier
+        data_counts: Dict of table_name -> record_count for snapshot data
+        reference_counts: Dict of table_name -> record_count for reference data
+    """
+    logger = logging.getLogger('hubspot.events')
+    
+    try:
+        client = bigquery.Client()
+        project_id = client.project
+        
+        # Lazy import Pub/Sub
+        publisher = _get_pubsub_client()
+        topic_path = publisher.topic_path(project_id, "hubspot-events")
+        
+        event_data = {
+            'snapshot_id': snapshot_id,
+            'timestamp': datetime.utcnow().isoformat() + "Z",
+            'data_tables': data_counts,
+            'reference_tables': reference_counts,
+            'metadata': {
+                'triggered_by': 'ingest_function',
+                'environment': os.getenv('ENVIRONMENT', 'production')
+            }
+        }
+        
+        event = {
+            "type": "hubspot.snapshot.completed",
+            "version": "1.0",
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "data": event_data
+        }
+        
+        message_json = json.dumps(event)
+        future = publisher.publish(topic_path, message_json.encode('utf-8'))
+        message_id = future.result()
+        
+        logger.info(f"📤 Published snapshot.completed event (message ID: {message_id})")
+        return message_id
+        
+    except ImportError as e:
+        logger.warning(f"⚠️ Pub/Sub not available for local testing: {e}")
+        logger.info("📤 Would have published event (local mode)")
+        return "local_mode_no_pubsub"
+    except Exception as e:
+        # Check if it's a permission error for local testing
+        if "403" in str(e) or "not authorized" in str(e).lower():
+            logger.warning(f"⚠️ Pub/Sub permission error (expected for local testing): {e}")
+            logger.info("📤 Would have published event (no permissions for local testing)")
+            return "local_mode_no_permissions"
+        else:
+            logger.error(f"❌ Failed to publish event: {e}")
+            # Don't fail the whole ingest if event publishing fails
+            return None
+
+
+def register_snapshot_ingest(snapshot_id: str, triggered_by: str, data_counts: dict, reference_counts: dict):
+    """
+    Register snapshot ingest completion in hs_snapshot_registry
+    
+    Args:
+        snapshot_id: The snapshot identifier
+        triggered_by: Who/what triggered this ingest
+        data_counts: Dict of data table counts
+        reference_counts: Dict of reference table counts
+    """
+    logger = logging.getLogger('hubspot.registry')
+    
+    try:
+        client = bigquery.Client()
+        dataset = os.getenv("BIGQUERY_DATASET_ID", "hubspot_dev")
+        project_id = client.project
+        table_ref = f"{project_id}.{dataset}.hs_snapshot_registry"
+        
+        # Create comprehensive notes
+        total_data = sum(data_counts.values())
+        total_reference = sum(reference_counts.values())
+        notes = f"Ingest: {total_data} data records, {total_reference} reference records. Tables: {list(data_counts.keys())}"
+        
+        row = {
+            "snapshot_id": snapshot_id,
+            "snapshot_timestamp": datetime.utcnow().isoformat(),
+            "triggered_by": triggered_by,
+            "status": "ingest_completed",  # Specific status for ingest
+            "notes": notes,
+        }
+        
+        errors = client.insert_rows_json(table_ref, [row])
+        if errors:
+            logger.error(f"❌ Failed to register snapshot ingest: {errors}")
+        else:
+            logger.info(f"✅ Registered ingest completion for snapshot {snapshot_id}")
+            
+    except Exception as e:
+        logger.error(f"❌ Exception while registering snapshot ingest: {e}")
+        # Don't fail the whole ingest for registry issues
+
+
+def update_snapshot_registry_scoring(snapshot_id: str, status: str = "completed", notes: str = None):
+    """
+    Update snapshot registry when scoring completes
+    This would be called from the scoring function
+    
+    Args:
+        snapshot_id: The snapshot identifier
+        status: "scoring_completed", "scoring_failed", etc.
+        notes: Additional notes about scoring
+    """
+    logger = logging.getLogger('hubspot.registry')
+    
+    try:
+        client = bigquery.Client()
+        dataset = os.getenv("BIGQUERY_DATASET_ID", "hubspot_dev")
+        project_id = client.project
+        
+        # Update the existing record
+        update_query = f"""
+        UPDATE `{project_id}.{dataset}.hs_snapshot_registry`
+        SET 
+            status = @new_status,
+            notes = CONCAT(IFNULL(notes, ''), ' | Scoring: ', @new_notes)
+        WHERE snapshot_id = @snapshot_id
+        """
+        
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id),
+                bigquery.ScalarQueryParameter("new_status", "STRING", f"ingest_and_{status}"),
+                bigquery.ScalarQueryParameter("new_notes", "STRING", notes or "completed")
+            ]
+        )
+        
+        query_job = client.query(update_query, job_config=job_config)
+        query_job.result()
+        
+        logger.info(f"✅ Updated registry for snapshot {snapshot_id} with scoring status")
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to update snapshot registry: {e}")
 
 
 def _bq_type(value):
