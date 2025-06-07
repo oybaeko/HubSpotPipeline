@@ -2,12 +2,18 @@
 
 import logging
 import os
-from datetime import datetime
 from typing import List, Dict, Any, Tuple
 from google.cloud import bigquery
-from google.api_core.exceptions import NotFound
 
-def ensure_table_exists(table_name: str, schema: List[Tuple[str, str]], dataset: str = None) -> None:
+# Import our new BigQuery utilities
+from hubspot_pipeline.bigquery_utils import (
+    get_bigquery_client,
+    get_table_reference,
+    truncate_and_insert_with_retry,
+    ensure_table_exists
+)
+
+def ensure_table_exists_with_schema(table_name: str, schema: List[Tuple[str, str]], dataset: str = None) -> None:
     """
     Ensure BigQuery table exists with correct schema, create if needed.
     
@@ -18,15 +24,13 @@ def ensure_table_exists(table_name: str, schema: List[Tuple[str, str]], dataset:
     """
     logger = logging.getLogger('hubspot.reference')
     
-    client = bigquery.Client()
-    dataset = dataset or os.getenv("BIGQUERY_DATASET_ID", "hubspot_dev")
-    project_id = client.project
-    full_table = f"{project_id}.{dataset}.{table_name}"
+    client = get_bigquery_client()
+    full_table = get_table_reference(table_name, dataset)
     
     try:
         existing_table = client.get_table(full_table)
         logger.debug(f"✅ Table {full_table} exists")
-    except NotFound:
+    except Exception:  # NotFound or other errors
         logger.info(f"📝 Table {full_table} not found. Creating with schema...")
         
         # Convert schema tuples to BigQuery schema fields
@@ -34,22 +38,17 @@ def ensure_table_exists(table_name: str, schema: List[Tuple[str, str]], dataset:
         for col_name, col_type in schema:
             bq_schema.append(bigquery.SchemaField(col_name, col_type))
         
-        try:
-            table = bigquery.Table(full_table, schema=bq_schema)
-            client.create_table(table)
-            logger.info(f"✅ Created table {full_table} with {len(bq_schema)} columns")
-            
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"Schema: {[(f.name, f.field_type) for f in bq_schema]}")
-        except Exception as e:
-            logger.error(f"❌ Failed to create table {full_table}: {e}")
-            raise RuntimeError(f"Failed to create table: {e}")
+        # Use utilities to ensure table exists
+        ensure_table_exists(client, full_table, bq_schema)
+        
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Schema: {[(f.name, f.field_type) for f in bq_schema]}")
 
 
 def replace_reference_table(rows: List[Dict[str, Any]], table_name: str, 
                           schema: List[Tuple[str, str]], dataset: str = None) -> int:
     """
-    Replace all data in a reference table (truncate + insert).
+    Replace all data in a reference table (truncate + insert) with retry logic.
     
     Args:
         rows: List of dictionaries to insert
@@ -66,33 +65,25 @@ def replace_reference_table(rows: List[Dict[str, Any]], table_name: str,
         logger.info(f"📊 No data to replace for {table_name}")
         return 0
     
-    client = bigquery.Client()
-    dataset = dataset or os.getenv("BIGQUERY_DATASET_ID", "hubspot_dev")
-    project_id = client.project
-    full_table = f"{project_id}.{dataset}.{table_name}"
+    # Use BigQuery utilities for consistent client and table reference
+    client = get_bigquery_client()
+    full_table = get_table_reference(table_name, dataset)
     
     logger.info(f"🔄 Replacing {len(rows)} rows in {table_name}")
     
     try:
         # Step 1: Ensure table exists
-        ensure_table_exists(table_name, schema, dataset)
+        ensure_table_exists_with_schema(table_name, schema, dataset)
         
-        # Step 2: Truncate existing data
-        logger.debug(f"🗑️ Truncating table {full_table}")
-        truncate_query = f"TRUNCATE TABLE `{full_table}`"
-        client.query(truncate_query).result()
-        logger.debug("✅ Table truncated")
+        # Step 2: Truncate and insert with retry using utilities
+        rows_inserted = truncate_and_insert_with_retry(
+            client=client,
+            table_ref=full_table,
+            rows=rows,
+            operation_name=f"replace {len(rows)} rows in {table_name}"
+        )
         
-        # Step 3: Insert new data
-        logger.debug(f"⬆️ Inserting {len(rows)} rows")
-        errors = client.insert_rows_json(full_table, rows)
-        
-        if errors:
-            logger.error(f"❌ BigQuery insertion errors: {errors}")
-            raise RuntimeError(f"BigQuery insertion failed: {errors}")
-        
-        logger.info(f"✅ Successfully replaced {len(rows)} rows in {table_name}")
-        return len(rows)
+        return rows_inserted
         
     except Exception as e:
         logger.error(f"❌ Failed to replace data in {table_name}: {e}")
@@ -116,7 +107,7 @@ def replace_owners(owners_data: List[Dict[str, Any]]) -> int:
     Returns:
         Number of owners inserted
     """
-    from .schemas import OWNERS_SCHEMA
+    from hubspot_pipeline.hubspot_ingest.reference.schemas import OWNERS_SCHEMA
     return replace_reference_table(owners_data, "hs_owners", OWNERS_SCHEMA)
 
 
@@ -130,5 +121,5 @@ def replace_deal_stages(stages_data: List[Dict[str, Any]]) -> int:
     Returns:
         Number of stages inserted
     """
-    from .schemas import DEAL_STAGES_SCHEMA
+    from hubspot_pipeline.hubspot_ingest.reference.schemas import DEAL_STAGES_SCHEMA
     return replace_reference_table(stages_data, "hs_deal_stage_reference", DEAL_STAGES_SCHEMA)

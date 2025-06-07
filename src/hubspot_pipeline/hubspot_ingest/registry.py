@@ -1,7 +1,5 @@
 # src/hubspot_pipeline/hubspot_ingest/registry.py
 
-# src/hubspot_pipeline/hubspot_ingest/registry.py
-
 import logging
 import os
 from datetime import datetime
@@ -9,7 +7,14 @@ from typing import Dict, Any, Optional
 from google.cloud import bigquery
 from google.api_core.exceptions import NotFound
 
-from .reference.schemas import SNAPSHOT_REGISTRY_SCHEMA
+# Import our new BigQuery utilities
+from hubspot_pipeline.bigquery_utils import (
+    get_bigquery_client,
+    get_table_reference,
+    insert_rows_with_retry,
+    ensure_table_exists
+)
+from hubspot_pipeline.hubspot_ingest.reference.schemas import SNAPSHOT_REGISTRY_SCHEMA
 
 def ensure_registry_table_exists() -> None:
     """
@@ -17,12 +22,8 @@ def ensure_registry_table_exists() -> None:
     """
     logger = logging.getLogger('hubspot.registry')
     
-    client = bigquery.Client()
-    dataset = os.getenv("BIGQUERY_DATASET_ID", "hubspot_dev")
-    # Use explicit project ID from environment to avoid client project ID mismatch
-    project_id = os.getenv("BIGQUERY_PROJECT_ID") or client.project
-    table_name = "hs_snapshot_registry"
-    full_table = f"{project_id}.{dataset}.{table_name}"
+    client = get_bigquery_client()
+    full_table = get_table_reference("hs_snapshot_registry")
     
     try:
         existing_table = client.get_table(full_table)
@@ -35,13 +36,8 @@ def ensure_registry_table_exists() -> None:
         for col_name, col_type in SNAPSHOT_REGISTRY_SCHEMA:
             bq_schema.append(bigquery.SchemaField(col_name, col_type))
         
-        try:
-            table = bigquery.Table(full_table, schema=bq_schema)
-            client.create_table(table)
-            logger.info(f"✅ Created registry table {full_table}")
-        except Exception as e:
-            logger.error(f"❌ Failed to create registry table: {e}")
-            raise RuntimeError(f"Failed to create registry table: {e}")
+        ensure_table_exists(client, full_table, bq_schema)
+        logger.info(f"✅ Created registry table {full_table}")
 
 
 def register_snapshot_start(snapshot_id: str, triggered_by: str = "manual") -> bool:
@@ -60,11 +56,8 @@ def register_snapshot_start(snapshot_id: str, triggered_by: str = "manual") -> b
     try:
         ensure_registry_table_exists()
         
-        client = bigquery.Client()
-        dataset = os.getenv("BIGQUERY_DATASET_ID", "hubspot_dev")
-        # Use explicit project ID from environment to avoid client project ID mismatch
-        project_id = os.getenv("BIGQUERY_PROJECT_ID") or client.project
-        table_ref = f"{project_id}.{dataset}.hs_snapshot_registry"
+        client = get_bigquery_client()
+        table_ref = get_table_reference("hs_snapshot_registry")
         
         row = {
             "snapshot_id": snapshot_id,
@@ -74,10 +67,13 @@ def register_snapshot_start(snapshot_id: str, triggered_by: str = "manual") -> b
             "notes": "Snapshot process initiated",
         }
         
-        errors = client.insert_rows_json(table_ref, [row])
-        if errors:
-            logger.error(f"❌ Failed to register snapshot start: {errors}")
-            return False
+        # Use utilities function with built-in retry logic
+        insert_rows_with_retry(
+            client=client,
+            table_ref=table_ref,
+            rows=[row],
+            operation_name=f"register snapshot start for {snapshot_id}"
+        )
         
         logger.info(f"✅ Registered snapshot start: {snapshot_id}")
         return True
@@ -104,10 +100,8 @@ def register_snapshot_ingest_complete(snapshot_id: str, data_counts: Dict[str, i
     logger = logging.getLogger('hubspot.registry')
     
     try:
-        client = bigquery.Client()
-        dataset = os.getenv("BIGQUERY_DATASET_ID", "hubspot_dev")
-        project_id = client.project
-        table_ref = f"{project_id}.{dataset}.hs_snapshot_registry"
+        client = get_bigquery_client()
+        table_ref = get_table_reference("hs_snapshot_registry")
         
         # Create comprehensive notes
         total_data = sum(data_counts.values())
@@ -124,10 +118,13 @@ def register_snapshot_ingest_complete(snapshot_id: str, data_counts: Dict[str, i
             "notes": notes,
         }
         
-        errors = client.insert_rows_json(table_ref, [completion_row])
-        if errors:
-            logger.error(f"❌ Failed to register ingest completion: {errors}")
-            return False
+        # Use utilities function with built-in retry logic
+        insert_rows_with_retry(
+            client=client,
+            table_ref=table_ref,
+            rows=[completion_row],
+            operation_name=f"register ingest completion for {snapshot_id}"
+        )
         
         logger.info(f"✅ Registered ingest completion for snapshot {snapshot_id}")
         return True
@@ -151,11 +148,11 @@ def register_snapshot_failure(snapshot_id: str, error_message: str) -> bool:
     logger = logging.getLogger('hubspot.registry')
     
     try:
-        client = bigquery.Client()
+        client = get_bigquery_client()
         dataset = os.getenv("BIGQUERY_DATASET_ID", "hubspot_dev")
-        project_id = client.project
+        project_id = os.getenv("BIGQUERY_PROJECT_ID")
         
-        # Update the existing record
+        # Update the existing record (this doesn't use insertAll API, so no retry needed)
         update_query = f"""
         UPDATE `{project_id}.{dataset}.hs_snapshot_registry`
         SET 
@@ -197,9 +194,9 @@ def update_snapshot_status(snapshot_id: str, status: str, notes: Optional[str] =
     logger = logging.getLogger('hubspot.registry')
     
     try:
-        client = bigquery.Client()
+        client = get_bigquery_client()
         dataset = os.getenv("BIGQUERY_DATASET_ID", "hubspot_dev")
-        project_id = client.project
+        project_id = os.getenv("BIGQUERY_PROJECT_ID")
         
         if notes:
             update_query = f"""
@@ -255,9 +252,9 @@ def get_latest_snapshot(status_filter: Optional[str] = None) -> Optional[Dict[st
     logger = logging.getLogger('hubspot.registry')
     
     try:
-        client = bigquery.Client()
+        client = get_bigquery_client()
         dataset = os.getenv("BIGQUERY_DATASET_ID", "hubspot_dev")
-        project_id = client.project
+        project_id = os.getenv("BIGQUERY_PROJECT_ID")
         
         base_query = f"""
         SELECT 

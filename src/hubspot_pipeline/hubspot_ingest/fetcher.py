@@ -4,7 +4,9 @@ import logging
 import os
 from hubspot import HubSpot
 from datetime import datetime
-from hubspot_pipeline.hubspot_ingest.store import store_to_bigquery, upsert_to_bigquery, publish_snapshot_completed_event, register_snapshot_ingest
+from hubspot_pipeline.hubspot_ingest.store import store_to_bigquery, upsert_to_bigquery
+from hubspot_pipeline.hubspot_ingest.events import publish_snapshot_completed_event
+from hubspot_pipeline.hubspot_ingest.registry import register_snapshot_ingest_complete
 
 def get_client():
     """Get HubSpot client with API key from environment"""
