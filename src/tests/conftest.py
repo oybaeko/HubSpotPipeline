@@ -1,6 +1,6 @@
 # ===============================================================================
 # src/tests/conftest.py  
-# Pytest configuration and shared fixtures
+# Simplified pytest configuration for two-tier validation
 # ===============================================================================
 
 import pytest
@@ -13,12 +13,12 @@ if TYPE_CHECKING:
     from .fixtures.test_session import TestSession
 
 def pytest_addoption(parser):
-    """Add custom command line options for our Cloud Function context"""
+    """Add custom command line options for Cloud Function testing"""
     parser.addoption(
         "--function-type", 
         action="store", 
         default="unknown",
-        help="Type of Cloud Function running tests: ingest or scoring"
+        help="Type of Cloud Function: ingest, scoring, or unknown"
     )
     parser.addoption(
         "--environment",
@@ -28,37 +28,33 @@ def pytest_addoption(parser):
     )
 
 def pytest_configure(config):
-    """Configure pytest with custom markers"""
+    """Configure pytest with custom markers for two-tier validation"""
+    # Tier 1: Deployment validation markers
     config.addinivalue_line(
-        "markers", "infrastructure: Infrastructure connectivity and permissions tests"
+        "markers", "deployment: Tier 1 - Environment-specific deployment validation"
     )
+    
+    # Tier 2: Runtime validation markers  
     config.addinivalue_line(
-        "markers", "database: Database operation tests"
+        "markers", "runtime: Tier 2 - Basic runtime mechanism validation"
     )
-    config.addinivalue_line(
-        "markers", "events: Event system tests (Pub/Sub)"
-    )
-    config.addinivalue_line(
-        "markers", "logging: Logging system tests"
-    )
+    
+    # Safety markers
     config.addinivalue_line(
         "markers", "production_safe: Tests that are safe to run in production"
     )
     config.addinivalue_line(
         "markers", "production_only: Tests that should only run in production"
     )
-    config.addinivalue_line(
-        "markers", "slow: Tests that take longer than 30 seconds"
-    )
 
 @pytest.fixture(scope="session")
 def function_type(request) -> str:
-    """Fixture to get the function type context"""
+    """Fixture to get the function type context (ingest/scoring)"""
     return request.config.getoption("--function-type")
 
 @pytest.fixture(scope="session") 
 def environment(request) -> str:
-    """Fixture to get the current environment"""
+    """Fixture to get the current environment (development/staging/production)"""
     return request.config.getoption("--environment")
 
 @pytest.fixture(scope="session")
@@ -75,14 +71,12 @@ def test_session(environment) -> Generator["TestSession", None, None]:
         cleanup_results = session.cleanup_all()
         if cleanup_results['failed'] > 0:
             print(f"\n⚠️ Cleanup issues: {cleanup_results['failed']} failed, {cleanup_results['cleaned']} succeeded")
-            for error in cleanup_results['errors']:
-                print(f"  • {error}")
         elif cleanup_results['cleaned'] > 0:
             print(f"\n✅ Cleanup completed: {cleanup_results['cleaned']} resources cleaned")
 
 @pytest.fixture(scope="function")
 def safe_test_id() -> str:
-    """Generate a safe, unique test identifier"""
+    """Generate a safe, unique test identifier for temporary resources"""
     timestamp = int(datetime.utcnow().timestamp())
     random_suffix = uuid.uuid4().hex[:8]
     return f"test_{timestamp}_{random_suffix}"
@@ -101,5 +95,3 @@ def test_logger() -> Generator[object, None, None]:
         formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
         handler.setFormatter(formatter)
         logger.addHandler(handler)
-    
-    yield logger

@@ -1,5 +1,5 @@
 # ===============================================================================
-# src/scoring_main.py - Updated with pytest testing integration
+# src/scoring_main.py - Updated with simplified two-tier testing
 # ===============================================================================
 
 import logging
@@ -11,7 +11,7 @@ import functions_framework
 @functions_framework.cloud_event
 def main(cloud_event):
     """
-    Scoring Cloud Function entry point with integrated pytest testing
+    Scoring Cloud Function entry point with two-tier testing framework
     
     Args:
         cloud_event: CloudEvent object containing Pub/Sub message
@@ -42,25 +42,20 @@ def main(cloud_event):
         
         # Check for test request
         if event_type == 'hubspot.test.request':
-            logger.info("🧪 Test mode detected - running pytest-based tests")
-            return run_pytest_tests(message, logger)
+            logger.info("🧪 Test mode detected - running two-tier validation")
+            return run_two_tier_tests_scoring(message, logger)
         
         # Check if this is the event we care about
         if event_type != 'hubspot.snapshot.completed':
             logger.info(f"ℹ️ Ignoring event type: {event_type}")
             return {"status": "ignored", "event_type": event_type}
         
-        # Extract and validate event data
-        event_data = message.get('data', {})
-        if not event_data.get('snapshot_id'):
-            logger.error("❌ No snapshot_id in event data")
-            return {"status": "error", "message": "Missing snapshot_id"}
-        
         # Normal scoring logic
         from hubspot_pipeline.hubspot_scoring.config import init_env
         init_env(log_level='INFO')
         
         from hubspot_pipeline.hubspot_scoring.main import process_snapshot_event
+        event_data = message.get('data', {})
         result = process_snapshot_event(event_data)
         
         logger.info(f"🎉 Scoring function completed with status: {result.get('status')}")
@@ -75,9 +70,9 @@ def main(cloud_event):
             "timestamp": datetime.utcnow().isoformat()
         }
 
-def run_pytest_tests(message: dict, logger) -> dict:
+def run_two_tier_tests_scoring(message: dict, logger) -> dict:
     """
-    Run pytest-based tests for scoring function
+    Run two-tier validation tests for scoring function
     
     Args:
         message: Parsed Pub/Sub message containing test parameters
@@ -87,31 +82,40 @@ def run_pytest_tests(message: dict, logger) -> dict:
         dict: Test results
     """
     test_data = message.get('data', {})
-    test_type = test_data.get('test_type', 'infrastructure')
+    test_type = test_data.get('test_type', 'deployment')
     
-    logger.info(f"🧪 Running {test_type} tests via pytest framework")
+    # Map old test types to new two-tier system
+    if test_type in ['infrastructure', 'database', 'events', 'logging', 'all_safe']:
+        tier = 'deployment'  # Tier 1: Environment-specific validation
+    elif test_type in ['runtime', 'mechanisms']:
+        tier = 'runtime'     # Tier 2: Basic runtime validation
+    else:
+        tier = 'deployment'  # Default to deployment validation
+    
+    logger.info(f"🧪 Running {tier} validation (test_type: {test_type})")
     
     try:
         # Import and run tests
         from tests import run_production_tests
         
         test_results = run_production_tests(
-            test_type=test_type,
+            test_type=tier,
             function_type='scoring',
             event_data=test_data
         )
         
         # Log results
         if test_results['status'] == 'success':
-            logger.info(f"✅ Tests passed: {test_results['summary']['passed']}/{test_results['summary']['total']}")
+            logger.info(f"✅ {tier.title()} validation passed: {test_results['summary']['passed']}/{test_results['summary']['total']}")
         elif test_results['status'] == 'partial_success':
-            logger.warning(f"⚠️ Partial success: {test_results['summary']['failed']} tests failed")
+            logger.warning(f"⚠️ {tier.title()} validation partial: {test_results['summary']['failed']} tests failed")
         else:
-            logger.error(f"❌ Tests failed: {test_results.get('error', 'Unknown error')}")
+            logger.error(f"❌ {tier.title()} validation failed: {test_results.get('error', 'Unknown error')}")
         
         # Format response for Pub/Sub context
         formatted_response = {
             'test_mode': True,
+            'validation_tier': tier,
             'function_type': 'scoring',
             'test_type': test_type,
             'status': test_results['status'],
@@ -119,6 +123,11 @@ def run_pytest_tests(message: dict, logger) -> dict:
             'environment': _detect_environment_scoring(),
             'timestamp': datetime.utcnow().isoformat() + 'Z',
             'trigger_type': 'pubsub',
+            'framework_info': {
+                'tier_1_deployment': 'Environment-specific validation',
+                'tier_2_runtime': 'Basic mechanism validation',
+                'current_tier': tier
+            },
             'details': {
                 'passed_tests': [t['name'] for t in test_results.get('tests', []) if t['outcome'] == 'passed'],
                 'failed_tests': [
@@ -137,8 +146,9 @@ def run_pytest_tests(message: dict, logger) -> dict:
         return {
             'test_mode': True,
             'status': 'error',
-            'error': 'pytest testing framework not available in this deployment',
-            'suggestion': 'This function was deployed without testing framework. Redeploy with tests included.',
+            'error': 'Two-tier testing framework not available in this deployment',
+            'validation_tier': tier,
+            'suggestion': 'Redeploy with updated deploy.sh script that includes tests directory',
             'import_error': str(e)
         }
         
@@ -148,6 +158,7 @@ def run_pytest_tests(message: dict, logger) -> dict:
             'test_mode': True,
             'status': 'error',
             'error': str(e),
+            'validation_tier': tier,
             'function_type': 'scoring',
             'test_type': test_type
         }
@@ -192,51 +203,4 @@ def parse_cloud_event(cloud_event):
         
     except Exception as e:
         logger.error(f"Failed to parse CloudEvent: {e}")
-        logger.debug(f"CloudEvent type: {type(cloud_event)}")
-        logger.debug(f"CloudEvent attributes: {dir(cloud_event)}")
-        if hasattr(cloud_event, 'data'):
-            logger.debug(f"CloudEvent data: {cloud_event.data}")
         return None
-
-# ===============================================================================
-# Helper function to test the scoring function via Pub/Sub message
-# ===============================================================================
-
-def create_test_pubsub_message(test_type: str = 'infrastructure', **kwargs) -> dict:
-    """
-    Create a test Pub/Sub message for triggering scoring function tests
-    
-    Args:
-        test_type: Type of test to run
-        **kwargs: Additional test parameters
-        
-    Returns:
-        dict: Formatted message for Pub/Sub publishing
-    """
-    import json
-    import base64
-    from datetime import datetime
-    
-    test_event = {
-        "type": "hubspot.test.request",
-        "version": "1.0",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-        "source": "test-framework",
-        "data": {
-            "test_type": test_type,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            **kwargs
-        }
-    }
-    
-    # Encode for Pub/Sub
-    message_json = json.dumps(test_event)
-    message_data = base64.b64encode(message_json.encode('utf-8')).decode('utf-8')
-    
-    return {
-        'data': message_data,
-        'attributes': {
-            'eventType': 'hubspot.test.request',
-            'source': 'test-framework'
-        }
-    }

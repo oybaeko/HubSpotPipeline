@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# HubSpot Pipeline Functions Deployment Script - Complete with all functions
+# HubSpot Pipeline Functions Deployment Script - Updated for Two-Tier Testing
 # Usage: ./deploy.sh [ingest|scoring] [dev|staging|prod] or interactive menu
 
 set -e  # Exit on any error
@@ -10,6 +10,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Configuration functions
@@ -104,7 +105,7 @@ MEMORY="512MB"
 function print_header() {
     echo -e "${BLUE}================================================${NC}"
     echo -e "${BLUE}    HubSpot Pipeline Functions Deployment${NC}"
-    echo -e "${BLUE}       (with Testing Framework Support)${NC}"
+    echo -e "${BLUE}       (with Two-Tier Testing Framework)${NC}"
     echo -e "${BLUE}================================================${NC}"
 }
 
@@ -284,7 +285,7 @@ function confirm_deployment() {
     echo -e "  Dataset: $(get_dataset $env)"
     echo -e "  Region: $REGION"
     echo -e "  Runtime: $RUNTIME"
-    echo -e "  Testing Framework: ${GREEN}✅ Included${NC}"
+    echo -e "  Two-Tier Testing: ${GREEN}✅ Included${NC}"
     
     if [ "$warning_level" = "high" ]; then
         echo -e "\n${RED}⚠️  PRODUCTION DEPLOYMENT WARNING ⚠️${NC}"
@@ -324,7 +325,7 @@ function confirm_deployment() {
 function create_gcloudignore() {
     local source_dir=$1
     
-    echo -e "${BLUE}📁 Creating .gcloudignore for testing framework support...${NC}"
+    echo -e "${BLUE}📁 Creating .gcloudignore for two-tier testing framework...${NC}"
     
     # Create .gcloudignore that includes tests but excludes unnecessary files
     cat > "$source_dir/.gcloudignore" << 'EOF'
@@ -401,13 +402,23 @@ comprehensive-test-results.json
 # Excel import (not needed in Cloud Functions)
 excel_import/
 
-# Development scripts (keep tests/ directory)
+# Development scripts (KEEP tests/ directory for two-tier testing)
 invoke_cloud_function.py
 test-ingest.sh
 validate-framework.sh
+
+# OLD test files to exclude (if they still exist)
+tests/test_framework_validation.py
+tests/test_infrastructure.py
+tests/test_database_ops.py
+tests/test_events.py
+tests/test_logging.py
+tests/fixtures/bigquery_fixtures.py
+tests/fixtures/pubsub_fixtures.py
+tests/markers/production_safe.py
 EOF
 
-    echo -e "${GREEN}✅ Created .gcloudignore - tests/ directory will be included${NC}"
+    echo -e "${GREEN}✅ Created .gcloudignore - two-tier tests included, old tests excluded${NC}"
 }
 
 function prepare_function_source() {
@@ -415,7 +426,7 @@ function prepare_function_source() {
     local source_file=$(get_source_file $func_type)
     
     echo -e "${BLUE}📁 Preparing source for $func_type function...${NC}"
-    echo -e "${YELLOW}ℹ️  Using enhanced entry point with test framework support${NC}"
+    echo -e "${YELLOW}ℹ️  Using enhanced entry point with two-tier testing framework${NC}"
     
     # Create .gcloudignore to ensure tests are included
     create_gcloudignore "$SOURCE_DIR"
@@ -423,20 +434,22 @@ function prepare_function_source() {
     # Copy the appropriate entry point to main.py
     if [ "$func_type" = "scoring" ]; then
         cp "$SOURCE_DIR/scoring_main.py" "$SOURCE_DIR/main.py"
-        echo -e "${GREEN}✅ Using enhanced scoring_main.py (with test framework)${NC}"
+        echo -e "${GREEN}✅ Using enhanced scoring_main.py (with two-tier testing)${NC}"
     else
         cp "$SOURCE_DIR/ingest_main.py" "$SOURCE_DIR/main.py"
-        echo -e "${GREEN}✅ Using enhanced ingest_main.py (with test framework)${NC}"
+        echo -e "${GREEN}✅ Using enhanced ingest_main.py (with two-tier testing)${NC}"
     fi
     
-    # Verify test framework files exist
-    echo -e "${BLUE}🔍 Verifying test framework files...${NC}"
+    # Verify two-tier testing framework files exist
+    echo -e "${BLUE}🔍 Verifying two-tier testing framework files...${NC}"
     local required_test_files=(
         "tests/__init__.py"
         "tests/conftest.py"
-        "tests/test_framework_validation.py"
+        "tests/deployment_validation.py"
+        "tests/runtime_validation.py"
         "tests/fixtures/__init__.py"
         "tests/fixtures/test_session.py"
+        "tests/pytest.ini"
     )
     
     local missing_files=()
@@ -450,11 +463,11 @@ function prepare_function_source() {
     done
     
     if [ ${#missing_files[@]} -gt 0 ]; then
-        echo -e "${RED}❌ Missing test framework files. Please ensure all test files are present.${NC}"
+        echo -e "${RED}❌ Missing two-tier testing framework files. Please ensure all test files are present.${NC}"
         return 1
     fi
     
-    echo -e "${GREEN}✅ Test framework files verified${NC}"
+    echo -e "${GREEN}✅ Two-tier testing framework files verified${NC}"
 }
 
 function check_requirements() {
@@ -470,7 +483,7 @@ function check_requirements() {
         
         # Add pytest dependencies if missing
         echo "" >> "$req_file"
-        echo "# Testing dependencies (required for test mode in Cloud Functions)" >> "$req_file"
+        echo "# Testing dependencies (required for two-tier testing in Cloud Functions)" >> "$req_file"
         echo "pytest>=7.0.0" >> "$req_file"
         echo "pytest-json-report>=1.5.0" >> "$req_file"
         
@@ -494,7 +507,7 @@ function deploy_single_function() {
     local service_account=$(get_service_account $env)
     local dataset=$(get_dataset $env)
     
-    echo -e "\n${BLUE}🚀 Deploying $function_name with testing framework...${NC}"
+    echo -e "\n${BLUE}🚀 Deploying $function_name with two-tier testing framework...${NC}"
     echo -e "${BLUE}   Entry Point: $entry_point${NC}"
     echo -e "${BLUE}   Trigger: $trigger${NC}"
     
@@ -549,7 +562,7 @@ function deploy_single_function() {
     fi
     
     if [ $deployment_result -eq 0 ]; then
-        echo -e "\n${GREEN}✅ $function_name deployed successfully with testing framework!${NC}"
+        echo -e "\n${GREEN}✅ $function_name deployed successfully with two-tier testing framework!${NC}"
         
         # Apply secure permissions for scoring function
         if [ "$func_type" = "scoring" ]; then
@@ -572,26 +585,26 @@ function deploy_single_function() {
             echo -e "${GREEN}   Eventarc SA: $eventarc_sa${NC}"
         fi
         
-        # Show test command examples
-        echo -e "\n${CYAN}🧪 Test Framework Usage:${NC}"
+        # Show two-tier test command examples
+        echo -e "\n${CYAN}🧪 Two-Tier Testing Framework Usage:${NC}"
         
         if [ "$func_type" = "ingest" ]; then
             echo -e "Function URL: https://$REGION-$PROJECT_ID.cloudfunctions.net/$function_name"
             
-            echo -e "\n${YELLOW}# Test infrastructure (production-safe):${NC}"
+            echo -e "\n${YELLOW}# Tier 1: Environment-specific deployment validation:${NC}"
+            echo "curl -X POST https://$REGION-$PROJECT_ID.cloudfunctions.net/$function_name \\"
+            echo "  -H 'Content-Type: application/json' \\"
+            echo "  -d '{\"mode\": \"test\", \"test_type\": \"deployment\"}'"
+            
+            echo -e "\n${YELLOW}# Tier 2: Basic runtime mechanism validation:${NC}"
+            echo "curl -X POST https://$REGION-$PROJECT_ID.cloudfunctions.net/$function_name \\"
+            echo "  -H 'Content-Type: application/json' \\"
+            echo "  -d '{\"mode\": \"test\", \"test_type\": \"runtime\"}'"
+            
+            echo -e "\n${YELLOW}# Legacy compatibility (maps to appropriate tier):${NC}"
             echo "curl -X POST https://$REGION-$PROJECT_ID.cloudfunctions.net/$function_name \\"
             echo "  -H 'Content-Type: application/json' \\"
             echo "  -d '{\"mode\": \"test\", \"test_type\": \"infrastructure\"}'"
-            
-            echo -e "\n${YELLOW}# Test database operations (safe):${NC}"
-            echo "curl -X POST https://$REGION-$PROJECT_ID.cloudfunctions.net/$function_name \\"
-            echo "  -H 'Content-Type: application/json' \\"
-            echo "  -d '{\"mode\": \"test\", \"test_type\": \"database\"}'"
-            
-            echo -e "\n${YELLOW}# Test all production-safe tests:${NC}"
-            echo "curl -X POST https://$REGION-$PROJECT_ID.cloudfunctions.net/$function_name \\"
-            echo "  -H 'Content-Type: application/json' \\"
-            echo "  -d '{\"mode\": \"test\", \"test_type\": \"all_safe\"}'"
             
             local topic=$(get_pubsub_topic $env)
             echo -e "\nWill publish to topic: $topic"
@@ -600,9 +613,13 @@ function deploy_single_function() {
             local topic=$(get_pubsub_topic $env)
             echo -e "${GREEN}Scoring function deployed with Pub/Sub trigger on: $topic${NC}"
             
-            echo -e "\n${YELLOW}# Test scoring function via Pub/Sub:${NC}"
+            echo -e "\n${YELLOW}# Tier 1: Test scoring function deployment validation via Pub/Sub:${NC}"
             echo "gcloud pubsub topics publish $topic \\"
-            echo "  --message='{\"type\":\"hubspot.test.request\",\"data\":{\"test_type\":\"infrastructure\"}}'"
+            echo "  --message='{\"type\":\"hubspot.test.request\",\"data\":{\"test_type\":\"deployment\"}}'"
+            
+            echo -e "\n${YELLOW}# Tier 2: Test scoring function runtime validation via Pub/Sub:${NC}"
+            echo "gcloud pubsub topics publish $topic \\"
+            echo "  --message='{\"type\":\"hubspot.test.request\",\"data\":{\"test_type\":\"runtime\"}}'"
             
             echo -e "\n${BLUE}🧪 Test by triggering the $env ingest function${NC}"
         fi
@@ -613,6 +630,7 @@ function deploy_single_function() {
         return 1
     fi
 }
+
 function deploy_functions() {
     local func_type=$1
     local env=$2
@@ -644,6 +662,12 @@ function deploy_functions() {
 
 function main() {
     print_header
+    
+    # Check prerequisites first
+    if ! check_prerequisites; then
+        echo -e "${RED}❌ Prerequisites check failed${NC}"
+        exit 1
+    fi
     
     # Parse command line arguments
     if [ $# -eq 0 ]; then
@@ -684,19 +708,20 @@ function main() {
             ;;
     esac
     
-    echo -e "\n${GREEN}🎉 Deployment completed successfully with testing framework!${NC}"
+    echo -e "\n${GREEN}🎉 Deployment completed successfully with two-tier testing framework!${NC}"
 }
 
 # Show help if requested
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
-    echo "HubSpot Pipeline Functions Deployment Script - Enhanced with Testing Framework"
+    echo "HubSpot Pipeline Functions Deployment Script - Enhanced with Two-Tier Testing Framework"
     echo ""
     echo "Usage: $0 [FUNCTION_TYPE] [ENVIRONMENT]"
     echo ""
-    echo "NEW: Automatically includes pytest testing framework in deployments"
-    echo "✅ Tests are included in deployment package"
-    echo "✅ Testing dependencies added to requirements.txt if missing"
-    echo "✅ Ready for test mode immediately after deployment"
+    echo "NEW: Two-tier testing framework automatically included in deployments"
+    echo "✅ Tier 1: Environment-specific deployment validation"
+    echo "✅ Tier 2: Basic runtime mechanism validation"
+    echo "✅ Production-safe testing with automatic cleanup"
+    echo "✅ Ready for deployment confidence validation"
     echo ""
     echo "Interactive Mode:"
     echo "  $0                    # Shows menus for both function and environment"
@@ -717,8 +742,16 @@ if [[ "$1" == "-h" || "$1" == "--help" ]]; then
     echo "  staging   Staging (medium guards)"  
     echo "  prod      Production (maximum guards)"
     echo ""
-    echo "Testing Framework:"
+    echo "Two-Tier Testing Framework:"
     echo "  After deployment, test with:"
+    echo ""
+    echo "  # Tier 1: Environment-specific validation"
+    echo "  curl -d '{\"mode\": \"test\", \"test_type\": \"deployment\"}' [function-url]"
+    echo ""
+    echo "  # Tier 2: Runtime mechanism validation"
+    echo "  curl -d '{\"mode\": \"test\", \"test_type\": \"runtime\"}' [function-url]"
+    echo ""
+    echo "  # Legacy compatibility (automatically maps to appropriate tier)"
     echo "  curl -d '{\"mode\": \"test\", \"test_type\": \"infrastructure\"}' [function-url]"
     exit 0
 fi

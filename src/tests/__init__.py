@@ -1,6 +1,6 @@
 # ===============================================================================
 # src/tests/__init__.py
-# Main entry point for pytest-based testing framework
+# Two-Tier Environment Validation Framework
 # ===============================================================================
 
 import logging
@@ -10,15 +10,18 @@ import io
 from contextlib import redirect_stdout, redirect_stderr
 from typing import Dict, Any, Optional
 
-def run_production_tests(test_type: str = 'infrastructure', 
+def run_production_tests(test_type: str = 'deployment', 
                         function_type: str = 'unknown', 
                         **kwargs) -> Dict[str, Any]:
     """
-    Main entry point for production testing using pytest.
+    Two-tier environment validation entry point.
+    
+    Tier 1: deployment_validation - "Will THIS deployment work in THIS environment?"
+    Tier 2: runtime_validation - "Can the Python code execute at all?"
     
     Args:
-        test_type: Type of tests to run ('infrastructure', 'database', 'events', 'all_safe')
-        function_type: Context of which function is running ('ingest', 'scoring')
+        test_type: 'deployment' (environment-specific) or 'runtime' (basic sanity)
+        function_type: 'ingest' or 'scoring' for function-specific validation
         **kwargs: Additional parameters passed to tests
         
     Returns:
@@ -34,7 +37,7 @@ def run_production_tests(test_type: str = 'infrastructure',
             'function_type': function_type
         }
     
-    # Build pytest arguments
+    # Build pytest arguments based on test tier
     pytest_args = _build_pytest_args(test_type, function_type, kwargs)
     
     # Capture pytest output
@@ -82,6 +85,7 @@ def run_production_tests(test_type: str = 'infrastructure',
         test_results.update({
             'test_type': test_type,
             'function_type': function_type,
+            'validation_tier': 'deployment' if test_type == 'deployment' else 'runtime',
             'stdout': stdout_capture.getvalue(),
             'stderr': stderr_capture.getvalue() if exit_code != 0 else None
         })
@@ -106,7 +110,7 @@ def run_production_tests(test_type: str = 'infrastructure',
                 pass
 
 def _build_pytest_args(test_type: str, function_type: str, kwargs: Dict[str, Any]) -> list:
-    """Build pytest command line arguments based on test type"""
+    """Build pytest command line arguments for two-tier testing"""
     
     args = [
         '--tb=short',           # Short traceback format
@@ -123,25 +127,23 @@ def _build_pytest_args(test_type: str, function_type: str, kwargs: Dict[str, Any
     env = _detect_environment()
     args.extend(['--environment', env])
     
-    # Filter tests by type using markers
-    if test_type == 'infrastructure':
-        args.extend(['-m', 'infrastructure and production_safe'])
-    elif test_type == 'database':
-        args.extend(['-m', 'database and production_safe'])
-    elif test_type == 'events':
-        args.extend(['-m', 'events and production_safe'])
-    elif test_type == 'logging':
-        args.extend(['-m', 'logging and production_safe'])
-    elif test_type == 'all_safe':
-        args.extend(['-m', 'production_safe'])
-    else:
-        # Default to infrastructure if unknown type
-        args.extend(['-m', 'infrastructure and production_safe'])
-    
     # Specify test directory relative to this file
     import os
     test_dir = os.path.dirname(__file__)
-    args.append(test_dir)
+    
+    # Select appropriate test file based on tier
+    if test_type == 'deployment':
+        # Tier 1: Environment-specific deployment validation
+        test_file = os.path.join(test_dir, 'deployment_validation.py')
+        args.append(test_file)
+    elif test_type == 'runtime':
+        # Tier 2: Basic runtime/mechanism validation
+        test_file = os.path.join(test_dir, 'runtime_validation.py')
+        args.append(test_file)
+    else:
+        # Fallback: run both tiers
+        args.append(test_dir)
+        args.extend(['-m', 'production_safe'])
     
     return args
 

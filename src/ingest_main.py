@@ -1,5 +1,5 @@
 # ===============================================================================
-# src/ingest_main.py - Updated with pytest testing integration and better error handling
+# src/ingest_main.py - Updated with simplified two-tier testing
 # ===============================================================================
 
 import logging
@@ -9,7 +9,7 @@ from flask import Request
 
 def main(request: Request):
     """
-    Ingest Cloud Function entry point with integrated pytest testing
+    Ingest Cloud Function entry point with two-tier testing framework
     
     Args:
         request: Flask Request object containing HTTP request data
@@ -27,20 +27,14 @@ def main(request: Request):
     try:
         data = request.get_json(silent=True) or {}
         logger.info(f"📦 Parsed request data keys: {list(data.keys())}")
-        
-        # Log request details at debug level
-        if logger.isEnabledFor(logging.DEBUG):
-            safe_data = {k: v for k, v in data.items() if k not in ['api_key', 'token']}
-            logger.debug(f"Full request data: {safe_data}")
-            
     except Exception as e:
         logger.warning(f"Failed to parse JSON body: {e}")
         data = {}
     
     # Check for test mode
     if data.get('mode') == 'test':
-        logger.info("🧪 Test mode detected - running pytest-based tests")
-        return run_pytest_tests(data, logger)
+        logger.info("🧪 Test mode detected - running two-tier validation")
+        return run_two_tier_tests(data, logger, 'ingest')
     
     # Normal production logic
     try:
@@ -52,20 +46,29 @@ def main(request: Request):
         logger.error(f"❌ Ingest failed: {e}", exc_info=True)
         return f"Ingest error: {e}", 500
 
-def run_pytest_tests(data: dict, logger) -> tuple:
+def run_two_tier_tests(data: dict, logger, function_type: str) -> tuple:
     """
-    Run pytest-based tests and return formatted results
+    Run two-tier validation tests
     
     Args:
         data: Request data containing test parameters
         logger: Logger instance
+        function_type: Type of function ('ingest' or 'scoring')
         
     Returns:
         tuple: (response_data, status_code)
     """
-    test_type = data.get('test_type', 'infrastructure')
+    test_type = data.get('test_type', 'deployment')
     
-    logger.info(f"🧪 Running {test_type} tests via pytest framework")
+    # Map old test types to new two-tier system
+    if test_type in ['infrastructure', 'database', 'events', 'logging', 'all_safe']:
+        tier = 'deployment'  # Tier 1: Environment-specific validation
+    elif test_type in ['runtime', 'mechanisms']:
+        tier = 'runtime'     # Tier 2: Basic runtime validation
+    else:
+        tier = 'deployment'  # Default to deployment validation
+    
+    logger.info(f"🧪 Running {tier} validation (test_type: {test_type})")
     
     try:
         # Add current directory to Python path for imports
@@ -73,83 +76,55 @@ def run_pytest_tests(data: dict, logger) -> tuple:
         if current_dir not in sys.path:
             sys.path.insert(0, current_dir)
         
-        # Try to import the testing framework
+        # Import the two-tier testing framework
         try:
             from tests import run_production_tests
         except ImportError as import_error:
             logger.error(f"❌ Import error: {import_error}")
             
-            # Provide detailed debugging information
-            debug_info = {
-                'cwd': os.getcwd(),
-                'file_location': __file__,
-                'sys_path': sys.path[:5],  # First 5 entries
-                'available_modules': [],
-                'import_error': str(import_error)
-            }
-            
-            # Check what's available in current directory
-            try:
-                files = os.listdir('.')
-                debug_info['current_dir_contents'] = [f for f in files if not f.startswith('.')]
-            except:
-                debug_info['current_dir_contents'] = 'Unable to read'
-            
-            # Check if tests directory exists
-            tests_exists = os.path.exists('tests')
-            tests_init_exists = os.path.exists('tests/__init__.py')
-            
-            debug_info['tests_directory_exists'] = tests_exists
-            debug_info['tests_init_exists'] = tests_init_exists
-            
-            if tests_exists:
-                try:
-                    tests_contents = os.listdir('tests')
-                    debug_info['tests_contents'] = tests_contents
-                except:
-                    debug_info['tests_contents'] = 'Unable to read tests directory'
-            
             return {
                 'test_mode': True,
                 'status': 'error',
-                'error': 'pytest testing framework not available in this deployment',
+                'error': 'Two-tier testing framework not available in this deployment',
                 'error_type': 'ImportError',
-                'suggestion': 'Tests directory may not be included in deployment or pytest not installed',
-                'debug_info': debug_info,
-                'solution': 'Redeploy with updated deploy.sh script that includes tests directory'
-            }, 501  # Not Implemented
+                'suggestion': 'Redeploy with updated deploy.sh script that includes tests directory',
+                'tier': tier,
+                'function_type': function_type
+            }, 501
         
-        # If import successful, run tests
+        # Run appropriate tier
         test_results = run_production_tests(
-            test_type=test_type,
-            function_type='ingest',
+            test_type=tier,
+            function_type=function_type,
             request_data=data
         )
         
-        # Determine HTTP status code based on test results
+        # Determine HTTP status code
         if test_results['status'] == 'success':
             status_code = 200
-            logger.info(f"✅ Tests passed: {test_results['summary']['passed']}/{test_results['summary']['total']}")
+            logger.info(f"✅ {tier.title()} validation passed: {test_results['summary']['passed']}/{test_results['summary']['total']}")
         elif test_results['status'] == 'partial_success':
             status_code = 206  # Partial Content
-            logger.warning(f"⚠️ Partial success: {test_results['summary']['failed']} tests failed")
+            logger.warning(f"⚠️ {tier.title()} validation partial: {test_results['summary']['failed']} tests failed")
         else:
             status_code = 500
-            logger.error(f"❌ Tests failed: {test_results.get('error', 'Unknown error')}")
+            logger.error(f"❌ {tier.title()} validation failed: {test_results.get('error', 'Unknown error')}")
         
-        # Format response for better readability
+        # Format response
         formatted_response = {
             'test_mode': True,
-            'function_type': 'ingest',
+            'validation_tier': tier,
+            'function_type': function_type,
             'test_type': test_type,
             'status': test_results['status'],
             'summary': test_results['summary'],
             'environment': _detect_environment(),
             'timestamp': _get_timestamp(),
             'framework_info': {
-                'pytest_available': True,
-                'test_discovery': f"Found {test_results['summary']['total']} tests",
-                'execution_successful': test_results['status'] in ['success', 'partial_success']
+                'tier_1_deployment': 'Environment-specific validation',
+                'tier_2_runtime': 'Basic mechanism validation',
+                'current_tier': tier,
+                'test_discovery': f"Found {test_results['summary']['total']} tests"
             },
             'details': {
                 'passed_tests': [t['name'] for t in test_results.get('tests', []) if t['outcome'] == 'passed'],
@@ -162,40 +137,19 @@ def run_pytest_tests(data: dict, logger) -> tuple:
             }
         }
         
-        # Add debug info if test failed
-        if test_results['status'] != 'success' and test_results.get('stderr'):
-            formatted_response['debug'] = {
-                'stderr': test_results['stderr'][:1000],  # Limit length
-                'exit_code': test_results.get('exit_code')
-            }
-        
         return formatted_response, status_code
         
     except Exception as e:
         logger.error(f"❌ Test execution failed: {e}", exc_info=True)
         
-        # Provide comprehensive error information
         error_response = {
             'test_mode': True,
             'status': 'error', 
             'error': str(e),
             'error_type': type(e).__name__,
-            'function_type': 'ingest',
-            'test_type': test_type,
-            'troubleshooting': {
-                'common_causes': [
-                    'pytest not installed (missing from requirements.txt)',
-                    'tests directory not included in deployment',
-                    'Import path issues in Cloud Functions environment',
-                    'Missing test dependencies'
-                ],
-                'solutions': [
-                    'Ensure pytest is in requirements.txt',
-                    'Verify .gcloudignore includes tests directory',
-                    'Redeploy with updated deploy.sh script',
-                    'Check Cloud Function logs for detailed error'
-                ]
-            }
+            'validation_tier': tier,
+            'function_type': function_type,
+            'test_type': test_type
         }
         
         return error_response, 500

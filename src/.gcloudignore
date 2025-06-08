@@ -71,7 +71,17 @@ comprehensive-test-results.json
 # Excel import (not needed in Cloud Functions)
 excel_import/
 
-# Development scripts (keep tests/ directory)
+# Development scripts (KEEP tests/ directory for two-tier testing)
 invoke_cloud_function.py
 test-ingest.sh
 validate-framework.sh
+
+# OLD test files to exclude (if they still exist)
+tests/test_framework_validation.py
+tests/test_infrastructure.py
+tests/test_database_ops.py
+tests/test_events.py
+tests/test_logging.py
+tests/fixtures/bigquery_fixtures.py
+tests/fixtures/pubsub_fixtures.py
+tests/markers/production_safe.py

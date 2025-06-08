@@ -1,28 +1,25 @@
 # ===============================================================================
-# src/tests/markers/__init__.py  
-# Make markers directory a Python package
+# Updated markers/__init__.py - Simplified markers
 # ===============================================================================
 
+# NEW SIMPLIFIED markers/__init__.py content:
 """
-Custom pytest markers for HubSpot pipeline testing.
-Defines production-safe and environment-specific test markers.
-"""
+# Custom pytest markers for two-tier HubSpot pipeline testing
 
-# Custom marker definitions - these are also defined in conftest.py
+# Tier 1: Environment-specific deployment validation
+DEPLOYMENT_MARKER = "deployment"
+
+# Tier 2: Basic runtime mechanism validation  
+RUNTIME_MARKER = "runtime"
+
+# Safety markers
 PRODUCTION_SAFE_MARKER = "production_safe"
-PRODUCTION_ONLY_MARKER = "production_only" 
-INFRASTRUCTURE_MARKER = "infrastructure"
-DATABASE_MARKER = "database"
-EVENTS_MARKER = "events"
-LOGGING_MARKER = "logging"
-SLOW_MARKER = "slow"
+PRODUCTION_ONLY_MARKER = "production_only"
 
 __all__ = [
-    'PRODUCTION_SAFE_MARKER',
-    'PRODUCTION_ONLY_MARKER', 
-    'INFRASTRUCTURE_MARKER',
-    'DATABASE_MARKER',
-    'EVENTS_MARKER',
-    'LOGGING_MARKER',
-    'SLOW_MARKER'
+    'DEPLOYMENT_MARKER',
+    'RUNTIME_MARKER',
+    'PRODUCTION_SAFE_MARKER', 
+    'PRODUCTION_ONLY_MARKER'
 ]
+"""
