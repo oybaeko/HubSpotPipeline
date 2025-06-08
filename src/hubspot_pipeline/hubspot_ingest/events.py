@@ -17,6 +17,46 @@ def _get_pubsub_client():
         logging.error("❌ google-cloud-pubsub not installed. Run: pip install google-cloud-pubsub")
         raise ImportError("Missing dependency: google-cloud-pubsub") from e
 
+def get_environment():
+    """Get current environment from various sources"""
+    # Check Cloud Function/Cloud Run environment variables
+    function_name = os.getenv('K_SERVICE', '')  # Cloud Run service name
+    if 'prod' in function_name:
+        return 'production'
+    elif 'staging' in function_name:
+        return 'staging'
+    elif 'dev' in function_name:
+        return 'development'
+    
+    # Check explicit environment variable
+    env = os.getenv('ENVIRONMENT', '').lower()
+    if env in ['production', 'prod']:
+        return 'production'
+    elif env in ['staging', 'stage']:
+        return 'staging'
+    elif env in ['development', 'dev']:
+        return 'development'
+    
+    # Default to development
+    return 'development'
+
+def get_pubsub_topic_name():
+    """Get environment-specific topic name"""
+    env = get_environment()
+    
+    topic_mapping = {
+        'development': 'hubspot-events-dev',
+        'staging': 'hubspot-events-staging',
+        'production': 'hubspot-events-prod'
+    }
+    
+    topic_name = topic_mapping.get(env, 'hubspot-events-dev')
+    
+    logger = logging.getLogger('hubspot.events')
+    logger.debug(f"Environment: {env} -> Topic: {topic_name}")
+    
+    return topic_name
+
 def is_running_in_gcp():
     """Enhanced detection for Google Cloud environment including Cloud Functions"""
     logger = logging.getLogger('hubspot.events')
@@ -59,7 +99,7 @@ def is_running_in_gcp():
 def publish_snapshot_completed_event(snapshot_id: str, data_counts: Dict[str, int], 
                                    reference_counts: Dict[str, int]) -> Optional[str]:
     """
-    Publish snapshot completion event to Pub/Sub for scoring pipeline.
+    Publish snapshot completion event to environment-specific Pub/Sub topic for scoring pipeline.
     
     Args:
         snapshot_id: The snapshot identifier
@@ -93,10 +133,15 @@ def publish_snapshot_completed_event(snapshot_id: str, data_counts: Dict[str, in
             logger.error("⚠️ Pub/Sub client not available - missing google-cloud-pubsub dependency")
             return "missing_dependency"
         
-        topic_path = publisher.topic_path(project_id, "hubspot-events")
-        logger.debug(f"Publishing to topic: {topic_path}")
+        # Get environment-specific topic
+        topic_name = get_pubsub_topic_name()
+        topic_path = publisher.topic_path(project_id, topic_name)
+        
+        logger.info(f"📤 Publishing to environment-specific topic: {topic_name}")
+        logger.debug(f"Full topic path: {topic_path}")
         
         # Build event data
+        current_env = get_environment()
         event_data = {
             'snapshot_id': snapshot_id,
             'timestamp': datetime.utcnow().isoformat() + "Z",
@@ -104,7 +149,8 @@ def publish_snapshot_completed_event(snapshot_id: str, data_counts: Dict[str, in
             'reference_tables': reference_counts,
             'metadata': {
                 'triggered_by': 'ingest_function',
-                'environment': os.getenv('ENVIRONMENT', 'development'),
+                'environment': current_env,
+                'target_environment': current_env,  # Explicit target for clarity
                 'total_data_records': sum(data_counts.values()),
                 'total_reference_records': sum(reference_counts.values()),
                 'function_name': os.getenv('K_SERVICE', os.getenv('FUNCTION_NAME', 'unknown'))
@@ -116,18 +162,19 @@ def publish_snapshot_completed_event(snapshot_id: str, data_counts: Dict[str, in
             "type": "hubspot.snapshot.completed",
             "version": "1.0",
             "timestamp": datetime.utcnow().isoformat() + "Z",
-            "source": "hubspot-ingest",
+            "source": f"hubspot-ingest-{current_env}",
+            "environment": current_env,
             "data": event_data
         }
         
         # Publish event
         message_json = json.dumps(event)
-        logger.debug(f"Publishing message: {len(message_json)} bytes")
+        logger.debug(f"Publishing message: {len(message_json)} bytes to {topic_name}")
         
         future = publisher.publish(topic_path, message_json.encode('utf-8'))
         message_id = future.result()
         
-        logger.info(f"📤 Published snapshot.completed event (message ID: {message_id})")
+        logger.info(f"📤 Published snapshot.completed event to {topic_name} (message ID: {message_id})")
         logger.debug(f"Event data: snapshot_id={snapshot_id}, tables={list(data_counts.keys())}")
         
         return message_id
@@ -139,13 +186,14 @@ def publish_snapshot_completed_event(snapshot_id: str, data_counts: Dict[str, in
         if "403" in error_str or "permission" in error_str:
             logger.error(f"❌ Pub/Sub permission denied: {e}")
             logger.error("💡 Fix: Grant pubsub.publisher role to the service account")
-            logger.error(f"💡 Command: gcloud pubsub topics add-iam-policy-binding hubspot-events --member='serviceAccount:{os.getenv('SERVICE_ACCOUNT', 'YOUR_SERVICE_ACCOUNT')}' --role='roles/pubsub.publisher'")
+            logger.error(f"💡 Command: gcloud pubsub topics add-iam-policy-binding {get_pubsub_topic_name()} --member='serviceAccount:{os.getenv('SERVICE_ACCOUNT', 'YOUR_SERVICE_ACCOUNT')}' --role='roles/pubsub.publisher'")
             return "permission_denied"
             
         elif "404" in error_str or "not found" in error_str:
-            logger.error(f"❌ Pub/Sub topic not found: {e}")
-            logger.error("💡 Fix: Create the hubspot-events topic")
-            logger.error("💡 Command: gcloud pubsub topics create hubspot-events")
+            topic_name = get_pubsub_topic_name()
+            logger.error(f"❌ Pub/Sub topic not found: {topic_name}")
+            logger.error("💡 Fix: Create the environment-specific topic")
+            logger.error(f"💡 Command: gcloud pubsub topics create {topic_name}")
             return "topic_not_found"
             
         else:
@@ -156,7 +204,7 @@ def publish_snapshot_completed_event(snapshot_id: str, data_counts: Dict[str, in
 
 def publish_snapshot_failed_event(snapshot_id: str, error_message: str) -> Optional[str]:
     """
-    Publish snapshot failure event to Pub/Sub.
+    Publish snapshot failure event to environment-specific Pub/Sub topic.
     
     Args:
         snapshot_id: The snapshot identifier
@@ -186,16 +234,19 @@ def publish_snapshot_failed_event(snapshot_id: str, error_message: str) -> Optio
             logger.error("⚠️ Pub/Sub client not available")
             return "missing_dependency"
         
-        topic_path = publisher.topic_path(project_id, "hubspot-events")
+        # Get environment-specific topic
+        topic_name = get_pubsub_topic_name()
+        topic_path = publisher.topic_path(project_id, topic_name)
         
         # Build event data
+        current_env = get_environment()
         event_data = {
             'snapshot_id': snapshot_id,
             'timestamp': datetime.utcnow().isoformat() + "Z",
             'error_message': error_message,
             'metadata': {
                 'triggered_by': 'ingest_function',
-                'environment': os.getenv('ENVIRONMENT', 'development'),
+                'environment': current_env,
                 'function_name': os.getenv('K_SERVICE', os.getenv('FUNCTION_NAME', 'unknown'))
             }
         }
@@ -205,7 +256,8 @@ def publish_snapshot_failed_event(snapshot_id: str, error_message: str) -> Optio
             "type": "hubspot.snapshot.failed",
             "version": "1.0",
             "timestamp": datetime.utcnow().isoformat() + "Z",
-            "source": "hubspot-ingest",
+            "source": f"hubspot-ingest-{current_env}",
+            "environment": current_env,
             "data": event_data
         }
         
@@ -214,7 +266,7 @@ def publish_snapshot_failed_event(snapshot_id: str, error_message: str) -> Optio
         future = publisher.publish(topic_path, message_json.encode('utf-8'))
         message_id = future.result()
         
-        logger.info(f"📤 Published snapshot.failed event (message ID: {message_id})")
+        logger.info(f"📤 Published snapshot.failed event to {topic_name} (message ID: {message_id})")
         
         return message_id
         
@@ -225,7 +277,7 @@ def publish_snapshot_failed_event(snapshot_id: str, error_message: str) -> Optio
 
 def publish_custom_event(event_type: str, event_data: Dict, source: str = "hubspot-ingest") -> Optional[str]:
     """
-    Publish a custom event to Pub/Sub.
+    Publish a custom event to environment-specific Pub/Sub topic.
     
     Args:
         event_type: Type of event (e.g., "hubspot.reference.updated")
@@ -256,14 +308,18 @@ def publish_custom_event(event_type: str, event_data: Dict, source: str = "hubsp
             logger.error("⚠️ Pub/Sub client not available")
             return "missing_dependency"
         
-        topic_path = publisher.topic_path(project_id, "hubspot-events")
+        # Get environment-specific topic
+        topic_name = get_pubsub_topic_name()
+        topic_path = publisher.topic_path(project_id, topic_name)
         
         # Build full event envelope
+        current_env = get_environment()
         event = {
             "type": event_type,
             "version": "1.0",
             "timestamp": datetime.utcnow().isoformat() + "Z",
-            "source": source,
+            "source": f"{source}-{current_env}",
+            "environment": current_env,
             "data": event_data
         }
         
@@ -272,7 +328,7 @@ def publish_custom_event(event_type: str, event_data: Dict, source: str = "hubsp
         future = publisher.publish(topic_path, message_json.encode('utf-8'))
         message_id = future.result()
         
-        logger.info(f"📤 Published {event_type} event (message ID: {message_id})")
+        logger.info(f"📤 Published {event_type} event to {topic_name} (message ID: {message_id})")
         
         return message_id
         

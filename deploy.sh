@@ -350,13 +350,26 @@ function deploy_single_function() {
     local env=$2
     local function_name=$(get_function_name $func_type $env)
     local entry_point=$(get_entry_point $func_type)
-    local trigger=$(get_trigger_type $func_type)
+    local trigger=$(get_trigger_type $func_type $env)  # Pass environment
     local service_account=$(get_service_account $env)
     local dataset=$(get_dataset $env)
     
     echo -e "\n${BLUE}🚀 Deploying $function_name...${NC}"
     echo -e "${BLUE}   Entry Point: $entry_point${NC}"
     echo -e "${BLUE}   Trigger: $trigger${NC}"
+    
+    # For scoring functions, ensure the topic exists first
+    if [ "$func_type" = "scoring" ]; then
+        local topic=$(get_pubsub_topic $env)
+        echo -e "${BLUE}   Ensuring Pub/Sub topic exists: $topic${NC}"
+        
+        if ! gcloud pubsub topics describe $topic --project=$PROJECT_ID &>/dev/null; then
+            echo -e "${YELLOW}   Creating topic: $topic${NC}"
+            gcloud pubsub topics create $topic --project=$PROJECT_ID
+        else
+            echo -e "${GREEN}   Topic exists: $topic${NC}"
+        fi
+    fi
     
     # Prepare the main.py file for this function type
     prepare_function_source $func_type
@@ -371,7 +384,7 @@ function deploy_single_function() {
         --memory $MEMORY \
         --region $REGION \
         --service-account $service_account \
-        --set-env-vars BIGQUERY_DATASET_ID=$dataset,BIGQUERY_PROJECT_ID=$PROJECT_ID \
+        --set-env-vars BIGQUERY_DATASET_ID=$dataset,BIGQUERY_PROJECT_ID=$PROJECT_ID,ENVIRONMENT=$env \
         --quiet"
     
     # Execute deployment
@@ -402,12 +415,17 @@ function deploy_single_function() {
                 --role="roles/run.invoker" \
                 --quiet
             
+            local topic=$(get_pubsub_topic $env)
             echo -e "${GREEN}✅ Secure permissions applied to $function_name${NC}"
+            echo -e "${GREEN}   Topic: $topic${NC}"
             echo -e "${GREEN}   Eventarc SA: $eventarc_sa${NC}"
         fi
         
         if [ "$func_type" = "ingest" ]; then
             echo -e "${GREEN}Function URL: https://$REGION-$PROJECT_ID.cloudfunctions.net/$function_name${NC}"
+            
+            local topic=$(get_pubsub_topic $env)
+            echo -e "${GREEN}Will publish to topic: $topic${NC}"
             
             # Show test commands for ingest function
             echo -e "\n${BLUE}🧪 Test Commands for $function_name:${NC}"
@@ -423,8 +441,9 @@ function deploy_single_function() {
                 echo "  -d '{\"limit\": 10, \"dry_run\": false}'"
             fi
         else
-            echo -e "${GREEN}Scoring function deployed with secure Pub/Sub trigger${NC}"
-            echo -e "\n${BLUE}🧪 Test by triggering the ingest function to publish events${NC}"
+            local topic=$(get_pubsub_topic $env)
+            echo -e "${GREEN}Scoring function deployed with Pub/Sub trigger on: $topic${NC}"
+            echo -e "\n${BLUE}🧪 Test by triggering the $env ingest function${NC}"
         fi
         
     else
@@ -460,6 +479,34 @@ function deploy_functions() {
             exit 1
         fi
     fi
+}
+
+function get_pubsub_topic() {
+    local env=$1
+    case $env in
+        dev) echo "hubspot-events-dev" ;;
+        staging) echo "hubspot-events-staging" ;;
+        prod) echo "hubspot-events-prod" ;;
+        *) echo "hubspot-events-dev" ;;
+    esac
+}
+
+# Update the get_trigger_type function in deploy-ingest.sh
+function get_trigger_type() {
+    local func_type=$1
+    local env=$2  # Add environment parameter
+    case $func_type in
+        ingest) echo "--trigger-http --allow-unauthenticated" ;;
+        scoring) 
+            # Check if we want HTTP or Pub/Sub trigger for scoring
+            if [ "${SCORING_HTTP_MODE:-false}" = "true" ]; then
+                echo "--trigger-http --allow-unauthenticated"
+            else
+                local topic=$(get_pubsub_topic $env)
+                echo "--trigger-topic=$topic"
+            fi
+            ;;
+    esac
 }
 
 function main() {

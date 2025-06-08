@@ -1,0 +1,3 @@
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100    92    0     0  100    92      0     82  0:00:01  0:00:01 --:--:--    82100   313  100   221  100    92    196     81  0:00:01  0:00:01 --:--:--   278
