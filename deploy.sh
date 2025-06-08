@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# HubSpot Pipeline Functions Deployment Script
+# HubSpot Pipeline Functions Deployment Script - Complete with all functions
 # Usage: ./deploy.sh [ingest|scoring] [dev|staging|prod] or interactive menu
 
 set -e  # Exit on any error
@@ -52,6 +52,7 @@ function get_source_file() {
 
 function get_trigger_type() {
     local func_type=$1
+    local env=$2
     case $func_type in
         ingest) echo "--trigger-http --allow-unauthenticated" ;;
         scoring) 
@@ -59,7 +60,8 @@ function get_trigger_type() {
             if [ "${SCORING_HTTP_MODE:-false}" = "true" ]; then
                 echo "--trigger-http --allow-unauthenticated"
             else
-                echo "--trigger-topic=hubspot-events"
+                local topic=$(get_pubsub_topic $env)
+                echo "--trigger-topic=$topic"
             fi
             ;;
     esac
@@ -81,6 +83,16 @@ function get_dataset() {
     esac
 }
 
+function get_pubsub_topic() {
+    local env=$1
+    case $env in
+        dev) echo "hubspot-events-dev" ;;
+        staging) echo "hubspot-events-staging" ;;
+        prod) echo "hubspot-events-prod" ;;
+        *) echo "hubspot-events-dev" ;;
+    esac
+}
+
 # Common settings
 PROJECT_ID="hubspot-452402"
 REGION="europe-west1"
@@ -92,7 +104,75 @@ MEMORY="512MB"
 function print_header() {
     echo -e "${BLUE}================================================${NC}"
     echo -e "${BLUE}    HubSpot Pipeline Functions Deployment${NC}"
+    echo -e "${BLUE}       (with Testing Framework Support)${NC}"
     echo -e "${BLUE}================================================${NC}"
+}
+
+function check_prerequisites() {
+    echo -e "${BLUE}🔍 Checking prerequisites...${NC}"
+    
+    # Check if gcloud is installed and authenticated
+    if ! command -v gcloud &> /dev/null; then
+        echo -e "${RED}❌ gcloud CLI not found. Please install Google Cloud SDK.${NC}"
+        return 1
+    fi
+    
+    # Check if authenticated
+    if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" &> /dev/null; then
+        echo -e "${RED}❌ Not authenticated with gcloud. Run: gcloud auth login${NC}"
+        return 1
+    fi
+    
+    # Check if correct project is set
+    current_project=$(gcloud config get-value project 2>/dev/null)
+    if [ "$current_project" != "$PROJECT_ID" ]; then
+        echo -e "${YELLOW}⚠️  Setting project to $PROJECT_ID${NC}"
+        gcloud config set project $PROJECT_ID
+    fi
+    
+    # Check if source directory exists
+    if [ ! -d "$SOURCE_DIR" ]; then
+        echo -e "${RED}❌ Source directory '$SOURCE_DIR' not found${NC}"
+        return 1
+    fi
+    
+    # Check function-specific files based on what we're deploying
+    if [ "$FUNCTION_TYPE" = "ingest" ] || [ "$FUNCTION_TYPE" = "both" ]; then
+        if [ ! -f "$SOURCE_DIR/ingest_main.py" ]; then
+            echo -e "${RED}❌ Ingest entry point '$SOURCE_DIR/ingest_main.py' not found${NC}"
+            return 1
+        fi
+    fi
+    
+    if [ "$FUNCTION_TYPE" = "scoring" ] || [ "$FUNCTION_TYPE" = "both" ]; then
+        if [ ! -f "$SOURCE_DIR/scoring_main.py" ]; then
+            echo -e "${RED}❌ Scoring entry point '$SOURCE_DIR/scoring_main.py' not found${NC}"
+            return 1
+        fi
+    fi
+    
+    # Check if requirements.txt exists
+    if [ ! -f "$SOURCE_DIR/requirements.txt" ]; then
+        echo -e "${RED}❌ Requirements file '$SOURCE_DIR/requirements.txt' not found${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}✅ Prerequisites check passed${NC}"
+    return 0
+}
+
+function validate_inputs() {
+    if [[ ! "$FUNCTION_TYPE" =~ ^(ingest|scoring|both)$ ]]; then
+        echo -e "${RED}❌ Invalid function type: $FUNCTION_TYPE${NC}"
+        echo -e "${YELLOW}Usage: $0 [ingest|scoring|both] [dev|staging|prod]${NC}"
+        exit 1
+    fi
+    
+    if [[ ! "$ENVIRONMENT" =~ ^(dev|staging|prod)$ ]]; then
+        echo -e "${RED}❌ Invalid environment: $ENVIRONMENT${NC}"
+        echo -e "${YELLOW}Usage: $0 [ingest|scoring|both] [dev|staging|prod]${NC}"
+        exit 1
+    fi
 }
 
 function show_function_menu() {
@@ -181,20 +261,6 @@ function show_environment_menu() {
     done
 }
 
-function validate_inputs() {
-    if [[ ! "$FUNCTION_TYPE" =~ ^(ingest|scoring|both)$ ]]; then
-        echo -e "${RED}❌ Invalid function type: $FUNCTION_TYPE${NC}"
-        echo -e "${YELLOW}Usage: $0 [ingest|scoring|both] [dev|staging|prod]${NC}"
-        exit 1
-    fi
-    
-    if [[ ! "$ENVIRONMENT" =~ ^(dev|staging|prod)$ ]]; then
-        echo -e "${RED}❌ Invalid environment: $ENVIRONMENT${NC}"
-        echo -e "${YELLOW}Usage: $0 [ingest|scoring|both] [dev|staging|prod]${NC}"
-        exit 1
-    fi
-}
-
 function confirm_deployment() {
     local func_type=$1
     local env=$2
@@ -211,13 +277,14 @@ function confirm_deployment() {
     else
         echo -e "  Function: $(get_function_name $func_type $env)"
         echo -e "  Entry Point: $(get_entry_point $func_type)"
-        echo -e "  Trigger: $(get_trigger_type $func_type)"
+        echo -e "  Trigger: $(get_trigger_type $func_type $env)"
     fi
     
     echo -e "  Service Account: $(get_service_account $env)"
     echo -e "  Dataset: $(get_dataset $env)"
     echo -e "  Region: $REGION"
     echo -e "  Runtime: $RUNTIME"
+    echo -e "  Testing Framework: ${GREEN}✅ Included${NC}"
     
     if [ "$warning_level" = "high" ]; then
         echo -e "\n${RED}⚠️  PRODUCTION DEPLOYMENT WARNING ⚠️${NC}"
@@ -254,56 +321,93 @@ function confirm_deployment() {
     fi
 }
 
-function check_prerequisites() {
-    echo -e "\n${BLUE}🔍 Checking prerequisites...${NC}"
+function create_gcloudignore() {
+    local source_dir=$1
     
-    # Check if gcloud is installed and authenticated
-    if ! command -v gcloud &> /dev/null; then
-        echo -e "${RED}❌ gcloud CLI not found. Please install Google Cloud SDK.${NC}"
-        exit 1
-    fi
+    echo -e "${BLUE}📁 Creating .gcloudignore for testing framework support...${NC}"
     
-    # Check if authenticated
-    if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" &> /dev/null; then
-        echo -e "${RED}❌ Not authenticated with gcloud. Run: gcloud auth login${NC}"
-        exit 1
-    fi
-    
-    # Check if correct project is set
-    current_project=$(gcloud config get-value project 2>/dev/null)
-    if [ "$current_project" != "$PROJECT_ID" ]; then
-        echo -e "${YELLOW}⚠️  Setting project to $PROJECT_ID${NC}"
-        gcloud config set project $PROJECT_ID
-    fi
-    
-    # Check if source directory exists
-    if [ ! -d "$SOURCE_DIR" ]; then
-        echo -e "${RED}❌ Source directory '$SOURCE_DIR' not found${NC}"
-        exit 1
-    fi
-    
-    # Check function-specific files based on what we're deploying
-    if [ "$FUNCTION_TYPE" = "ingest" ] || [ "$FUNCTION_TYPE" = "both" ]; then
-        if [ ! -f "$SOURCE_DIR/ingest_main.py" ]; then
-            echo -e "${RED}❌ Ingest entry point '$SOURCE_DIR/ingest_main.py' not found${NC}"
-            exit 1
-        fi
-    fi
-    
-    if [ "$FUNCTION_TYPE" = "scoring" ] || [ "$FUNCTION_TYPE" = "both" ]; then
-        if [ ! -f "$SOURCE_DIR/scoring_main.py" ]; then
-            echo -e "${RED}❌ Scoring entry point '$SOURCE_DIR/scoring_main.py' not found${NC}"
-            exit 1
-        fi
-    fi
-    
-    # Check if requirements.txt exists
-    if [ ! -f "$SOURCE_DIR/requirements.txt" ]; then
-        echo -e "${RED}❌ Requirements file '$SOURCE_DIR/requirements.txt' not found${NC}"
-        exit 1
-    fi
-    
-    echo -e "${GREEN}✅ Prerequisites check passed${NC}"
+    # Create .gcloudignore that includes tests but excludes unnecessary files
+    cat > "$source_dir/.gcloudignore" << 'EOF'
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+docs/
+
+# Local development files
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Test results and coverage
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+test-results/
+comprehensive-test-results.json
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# Excel import (not needed in Cloud Functions)
+excel_import/
+
+# Development scripts (keep tests/ directory)
+invoke_cloud_function.py
+test-ingest.sh
+validate-framework.sh
+EOF
+
+    echo -e "${GREEN}✅ Created .gcloudignore - tests/ directory will be included${NC}"
 }
 
 function prepare_function_source() {
@@ -313,30 +417,89 @@ function prepare_function_source() {
     echo -e "${BLUE}📁 Preparing source for $func_type function...${NC}"
     echo -e "${YELLOW}ℹ️  Using enhanced entry point with test framework support${NC}"
     
-    # Instead of creating a new main.py, copy the enhanced entry point
+    # Create .gcloudignore to ensure tests are included
+    create_gcloudignore "$SOURCE_DIR"
+    
+    # Copy the appropriate entry point to main.py
     if [ "$func_type" = "scoring" ]; then
-        # Copy scoring_main.py to main.py
         cp "$SOURCE_DIR/scoring_main.py" "$SOURCE_DIR/main.py"
         echo -e "${GREEN}✅ Using enhanced scoring_main.py (with test framework)${NC}"
     else
-        # Copy ingest_main.py to main.py  
         cp "$SOURCE_DIR/ingest_main.py" "$SOURCE_DIR/main.py"
         echo -e "${GREEN}✅ Using enhanced ingest_main.py (with test framework)${NC}"
     fi
+    
+    # Verify test framework files exist
+    echo -e "${BLUE}🔍 Verifying test framework files...${NC}"
+    local required_test_files=(
+        "tests/__init__.py"
+        "tests/conftest.py"
+        "tests/test_framework_validation.py"
+        "tests/fixtures/__init__.py"
+        "tests/fixtures/test_session.py"
+    )
+    
+    local missing_files=()
+    for file in "${required_test_files[@]}"; do
+        if [ -f "$SOURCE_DIR/$file" ]; then
+            echo -e "${GREEN}  ✅ $file${NC}"
+        else
+            echo -e "${RED}  ❌ $file${NC}"
+            missing_files+=("$file")
+        fi
+    done
+    
+    if [ ${#missing_files[@]} -gt 0 ]; then
+        echo -e "${RED}❌ Missing test framework files. Please ensure all test files are present.${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}✅ Test framework files verified${NC}"
 }
 
+function check_requirements() {
+    echo -e "${BLUE}📦 Checking requirements.txt for testing dependencies...${NC}"
+    
+    local req_file="$SOURCE_DIR/requirements.txt"
+    
+    if grep -q "pytest" "$req_file"; then
+        echo -e "${GREEN}✅ pytest found in requirements.txt${NC}"
+    else
+        echo -e "${RED}❌ pytest missing from requirements.txt${NC}"
+        echo -e "${YELLOW}💡 Adding pytest dependencies...${NC}"
+        
+        # Add pytest dependencies if missing
+        echo "" >> "$req_file"
+        echo "# Testing dependencies (required for test mode in Cloud Functions)" >> "$req_file"
+        echo "pytest>=7.0.0" >> "$req_file"
+        echo "pytest-json-report>=1.5.0" >> "$req_file"
+        
+        echo -e "${GREEN}✅ Added pytest dependencies to requirements.txt${NC}"
+    fi
+    
+    if grep -q "pytest-json-report" "$req_file"; then
+        echo -e "${GREEN}✅ pytest-json-report found in requirements.txt${NC}"
+    else
+        echo -e "${YELLOW}⚠️ pytest-json-report missing - JSON reports may not be available${NC}"
+    fi
+}
+
+# Fix for the deploy_single_function - only change the deployment part
 function deploy_single_function() {
     local func_type=$1
     local env=$2
     local function_name=$(get_function_name $func_type $env)
     local entry_point=$(get_entry_point $func_type)
-    local trigger=$(get_trigger_type $func_type $env)  # Pass environment
+    local trigger=$(get_trigger_type $func_type $env)
     local service_account=$(get_service_account $env)
     local dataset=$(get_dataset $env)
     
-    echo -e "\n${BLUE}🚀 Deploying $function_name...${NC}"
+    echo -e "\n${BLUE}🚀 Deploying $function_name with testing framework...${NC}"
     echo -e "${BLUE}   Entry Point: $entry_point${NC}"
     echo -e "${BLUE}   Trigger: $trigger${NC}"
+    
+    # Check requirements
+    check_requirements
     
     # For scoring functions, ensure the topic exists first
     if [ "$func_type" = "scoring" ]; then
@@ -353,6 +516,10 @@ function deploy_single_function() {
     
     # Prepare the main.py file for this function type
     prepare_function_source $func_type
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}❌ Failed to prepare function source${NC}"
+        return 1
+    fi
     
     # Build the deployment command
     deploy_cmd="gcloud functions deploy $function_name \
@@ -367,18 +534,22 @@ function deploy_single_function() {
         --set-env-vars BIGQUERY_DATASET_ID=$dataset,BIGQUERY_PROJECT_ID=$PROJECT_ID,ENVIRONMENT=$env \
         --quiet"
     
-    # Execute deployment
+    echo -e "${BLUE}⏳ Executing deployment...${NC}"
+    echo -e "${BLUE}📝 Deployment will use main.py created from ${func_type}_main.py${NC}"
+    
+    # Execute deployment and capture result BEFORE cleanup
     eval $deploy_cmd
     deployment_result=$?
     
-    # Clean up the generated main.py
+    # Only clean up AFTER deployment completes (success or failure)
+    echo -e "${BLUE}🧹 Cleaning up generated main.py after deployment...${NC}"
     if [ -f "$SOURCE_DIR/main.py" ]; then
         rm "$SOURCE_DIR/main.py"
-        echo -e "${BLUE}🧹 Cleaned up generated main.py${NC}"
+        echo -e "${BLUE}✅ Cleaned up generated main.py${NC}"
     fi
     
     if [ $deployment_result -eq 0 ]; then
-        echo -e "\n${GREEN}✅ $function_name deployed successfully!${NC}"
+        echo -e "\n${GREEN}✅ $function_name deployed successfully with testing framework!${NC}"
         
         # Apply secure permissions for scoring function
         if [ "$func_type" = "scoring" ]; then
@@ -401,37 +572,47 @@ function deploy_single_function() {
             echo -e "${GREEN}   Eventarc SA: $eventarc_sa${NC}"
         fi
         
+        # Show test command examples
+        echo -e "\n${CYAN}🧪 Test Framework Usage:${NC}"
+        
         if [ "$func_type" = "ingest" ]; then
-            echo -e "${GREEN}Function URL: https://$REGION-$PROJECT_ID.cloudfunctions.net/$function_name${NC}"
+            echo -e "Function URL: https://$REGION-$PROJECT_ID.cloudfunctions.net/$function_name"
             
-            local topic=$(get_pubsub_topic $env)
-            echo -e "${GREEN}Will publish to topic: $topic${NC}"
-            
-            # Show test commands for ingest function
-            echo -e "\n${BLUE}🧪 Test Commands for $function_name:${NC}"
-            echo -e "${YELLOW}# Safe test (dry run):${NC}"
+            echo -e "\n${YELLOW}# Test infrastructure (production-safe):${NC}"
             echo "curl -X POST https://$REGION-$PROJECT_ID.cloudfunctions.net/$function_name \\"
             echo "  -H 'Content-Type: application/json' \\"
-            echo "  -d '{\"limit\": 5, \"dry_run\": true}'"
+            echo "  -d '{\"mode\": \"test\", \"test_type\": \"infrastructure\"}'"
             
-            if [ "$env" != "prod" ]; then
-                echo -e "\n${YELLOW}# Real test (small):${NC}"
-                echo "curl -X POST https://$REGION-$PROJECT_ID.cloudfunctions.net/$function_name \\"
-                echo "  -H 'Content-Type: application/json' \\"
-                echo "  -d '{\"limit\": 10, \"dry_run\": false}'"
-            fi
+            echo -e "\n${YELLOW}# Test database operations (safe):${NC}"
+            echo "curl -X POST https://$REGION-$PROJECT_ID.cloudfunctions.net/$function_name \\"
+            echo "  -H 'Content-Type: application/json' \\"
+            echo "  -d '{\"mode\": \"test\", \"test_type\": \"database\"}'"
+            
+            echo -e "\n${YELLOW}# Test all production-safe tests:${NC}"
+            echo "curl -X POST https://$REGION-$PROJECT_ID.cloudfunctions.net/$function_name \\"
+            echo "  -H 'Content-Type: application/json' \\"
+            echo "  -d '{\"mode\": \"test\", \"test_type\": \"all_safe\"}'"
+            
+            local topic=$(get_pubsub_topic $env)
+            echo -e "\nWill publish to topic: $topic"
+            
         else
             local topic=$(get_pubsub_topic $env)
             echo -e "${GREEN}Scoring function deployed with Pub/Sub trigger on: $topic${NC}"
+            
+            echo -e "\n${YELLOW}# Test scoring function via Pub/Sub:${NC}"
+            echo "gcloud pubsub topics publish $topic \\"
+            echo "  --message='{\"type\":\"hubspot.test.request\",\"data\":{\"test_type\":\"infrastructure\"}}'"
+            
             echo -e "\n${BLUE}🧪 Test by triggering the $env ingest function${NC}"
         fi
         
     else
         echo -e "\n${RED}❌ Deployment of $function_name failed${NC}"
+        echo -e "${RED}Check the Cloud Build logs for more details${NC}"
         return 1
     fi
 }
-
 function deploy_functions() {
     local func_type=$1
     local env=$2
@@ -459,34 +640,6 @@ function deploy_functions() {
             exit 1
         fi
     fi
-}
-
-function get_pubsub_topic() {
-    local env=$1
-    case $env in
-        dev) echo "hubspot-events-dev" ;;
-        staging) echo "hubspot-events-staging" ;;
-        prod) echo "hubspot-events-prod" ;;
-        *) echo "hubspot-events-dev" ;;
-    esac
-}
-
-# Update the get_trigger_type function in deploy-ingest.sh
-function get_trigger_type() {
-    local func_type=$1
-    local env=$2  # Add environment parameter
-    case $func_type in
-        ingest) echo "--trigger-http --allow-unauthenticated" ;;
-        scoring) 
-            # Check if we want HTTP or Pub/Sub trigger for scoring
-            if [ "${SCORING_HTTP_MODE:-false}" = "true" ]; then
-                echo "--trigger-http --allow-unauthenticated"
-            else
-                local topic=$(get_pubsub_topic $env)
-                echo "--trigger-topic=$topic"
-            fi
-            ;;
-    esac
 }
 
 function main() {
@@ -531,14 +684,19 @@ function main() {
             ;;
     esac
     
-    echo -e "\n${GREEN}🎉 Deployment completed successfully!${NC}"
+    echo -e "\n${GREEN}🎉 Deployment completed successfully with testing framework!${NC}"
 }
 
 # Show help if requested
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
-    echo "HubSpot Pipeline Functions Deployment Script"
+    echo "HubSpot Pipeline Functions Deployment Script - Enhanced with Testing Framework"
     echo ""
     echo "Usage: $0 [FUNCTION_TYPE] [ENVIRONMENT]"
+    echo ""
+    echo "NEW: Automatically includes pytest testing framework in deployments"
+    echo "✅ Tests are included in deployment package"
+    echo "✅ Testing dependencies added to requirements.txt if missing"
+    echo "✅ Ready for test mode immediately after deployment"
     echo ""
     echo "Interactive Mode:"
     echo "  $0                    # Shows menus for both function and environment"
@@ -558,6 +716,10 @@ if [[ "$1" == "-h" || "$1" == "--help" ]]; then
     echo "  dev       Development (minimal guards)"
     echo "  staging   Staging (medium guards)"  
     echo "  prod      Production (maximum guards)"
+    echo ""
+    echo "Testing Framework:"
+    echo "  After deployment, test with:"
+    echo "  curl -d '{\"mode\": \"test\", \"test_type\": \"infrastructure\"}' [function-url]"
     exit 0
 fi
 

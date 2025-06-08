@@ -1,8 +1,10 @@
 # ===============================================================================
-# src/ingest_main.py - Updated with pytest testing integration
+# src/ingest_main.py - Updated with pytest testing integration and better error handling
 # ===============================================================================
 
 import logging
+import sys
+import os
 from flask import Request
 
 def main(request: Request):
@@ -66,9 +68,58 @@ def run_pytest_tests(data: dict, logger) -> tuple:
     logger.info(f"🧪 Running {test_type} tests via pytest framework")
     
     try:
-        # Import and run tests
-        from tests import run_production_tests
+        # Add current directory to Python path for imports
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        if current_dir not in sys.path:
+            sys.path.insert(0, current_dir)
         
+        # Try to import the testing framework
+        try:
+            from tests import run_production_tests
+        except ImportError as import_error:
+            logger.error(f"❌ Import error: {import_error}")
+            
+            # Provide detailed debugging information
+            debug_info = {
+                'cwd': os.getcwd(),
+                'file_location': __file__,
+                'sys_path': sys.path[:5],  # First 5 entries
+                'available_modules': [],
+                'import_error': str(import_error)
+            }
+            
+            # Check what's available in current directory
+            try:
+                files = os.listdir('.')
+                debug_info['current_dir_contents'] = [f for f in files if not f.startswith('.')]
+            except:
+                debug_info['current_dir_contents'] = 'Unable to read'
+            
+            # Check if tests directory exists
+            tests_exists = os.path.exists('tests')
+            tests_init_exists = os.path.exists('tests/__init__.py')
+            
+            debug_info['tests_directory_exists'] = tests_exists
+            debug_info['tests_init_exists'] = tests_init_exists
+            
+            if tests_exists:
+                try:
+                    tests_contents = os.listdir('tests')
+                    debug_info['tests_contents'] = tests_contents
+                except:
+                    debug_info['tests_contents'] = 'Unable to read tests directory'
+            
+            return {
+                'test_mode': True,
+                'status': 'error',
+                'error': 'pytest testing framework not available in this deployment',
+                'error_type': 'ImportError',
+                'suggestion': 'Tests directory may not be included in deployment or pytest not installed',
+                'debug_info': debug_info,
+                'solution': 'Redeploy with updated deploy.sh script that includes tests directory'
+            }, 501  # Not Implemented
+        
+        # If import successful, run tests
         test_results = run_production_tests(
             test_type=test_type,
             function_type='ingest',
@@ -95,6 +146,11 @@ def run_pytest_tests(data: dict, logger) -> tuple:
             'summary': test_results['summary'],
             'environment': _detect_environment(),
             'timestamp': _get_timestamp(),
+            'framework_info': {
+                'pytest_available': True,
+                'test_discovery': f"Found {test_results['summary']['total']} tests",
+                'execution_successful': test_results['status'] in ['success', 'partial_success']
+            },
             'details': {
                 'passed_tests': [t['name'] for t in test_results.get('tests', []) if t['outcome'] == 'passed'],
                 'failed_tests': [
@@ -115,25 +171,34 @@ def run_pytest_tests(data: dict, logger) -> tuple:
         
         return formatted_response, status_code
         
-    except ImportError as e:
-        logger.error(f"❌ Testing framework not available: {e}")
-        return {
-            'test_mode': True,
-            'status': 'error',
-            'error': 'pytest testing framework not available in this deployment',
-            'suggestion': 'This function was deployed without testing framework. Redeploy with tests included.',
-            'import_error': str(e)
-        }, 501  # Not Implemented
-        
     except Exception as e:
         logger.error(f"❌ Test execution failed: {e}", exc_info=True)
-        return {
+        
+        # Provide comprehensive error information
+        error_response = {
             'test_mode': True,
             'status': 'error', 
             'error': str(e),
+            'error_type': type(e).__name__,
             'function_type': 'ingest',
-            'test_type': test_type
-        }, 500
+            'test_type': test_type,
+            'troubleshooting': {
+                'common_causes': [
+                    'pytest not installed (missing from requirements.txt)',
+                    'tests directory not included in deployment',
+                    'Import path issues in Cloud Functions environment',
+                    'Missing test dependencies'
+                ],
+                'solutions': [
+                    'Ensure pytest is in requirements.txt',
+                    'Verify .gcloudignore includes tests directory',
+                    'Redeploy with updated deploy.sh script',
+                    'Check Cloud Function logs for detailed error'
+                ]
+            }
+        }
+        
+        return error_response, 500
 
 def _detect_environment() -> str:
     """Detect current environment from Cloud Function context"""
