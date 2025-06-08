@@ -311,38 +311,18 @@ function prepare_function_source() {
     local source_file=$(get_source_file $func_type)
     
     echo -e "${BLUE}📁 Preparing source for $func_type function...${NC}"
+    echo -e "${YELLOW}ℹ️  Using enhanced entry point with test framework support${NC}"
     
+    # Instead of creating a new main.py, copy the enhanced entry point
     if [ "$func_type" = "scoring" ]; then
-        # Scoring function expects Pub/Sub event signature
-        cat > "$SOURCE_DIR/main.py" << EOF
-# Auto-generated main.py for Cloud Function deployment (Pub/Sub)
-# This file imports and delegates to the scoring function implementation
-
-from ${source_file%.*} import main as original_main
-
-def main(cloud_event):
-    """
-    Cloud Function entry point for Pub/Sub events (2nd gen)
-    """
-    return original_main(cloud_event)
-EOF
+        # Copy scoring_main.py to main.py
+        cp "$SOURCE_DIR/scoring_main.py" "$SOURCE_DIR/main.py"
+        echo -e "${GREEN}✅ Using enhanced scoring_main.py (with test framework)${NC}"
     else
-        # Ingest function expects HTTP request signature
-        cat > "$SOURCE_DIR/main.py" << EOF
-# Auto-generated main.py for Cloud Function deployment (HTTP)
-# This file imports and delegates to the ingest function implementation
-
-from ${source_file%.*} import main as original_main
-
-def main(request):
-    """
-    Cloud Function entry point for HTTP requests
-    """
-    return original_main(request)
-EOF
+        # Copy ingest_main.py to main.py  
+        cp "$SOURCE_DIR/ingest_main.py" "$SOURCE_DIR/main.py"
+        echo -e "${GREEN}✅ Using enhanced ingest_main.py (with test framework)${NC}"
     fi
-    
-    echo -e "${GREEN}✅ Created main.py delegation for $func_type${NC}"
 }
 
 function deploy_single_function() {

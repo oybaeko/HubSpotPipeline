@@ -1,323 +1,353 @@
-# HubSpot Pipeline
+# HubSpot Pipeline - Ingest & Scoring System
 
-A Google Cloud Functions-based ETL pipeline that fetches data from HubSpot API, processes it through BigQuery, and calculates pipeline scores with complete environment isolation.
+A production-ready Cloud Functions pipeline for ingesting HubSpot data and running scoring calculations on Google Cloud Platform.
 
-## 🏗️ Architecture
+## 🏗️ Architecture Overview
 
-### **Two-Pipeline System:**
-- **Ingest Pipeline**: Fetches HubSpot data → BigQuery snapshots → Pub/Sub events
-- **Scoring Pipeline**: Processes snapshots → Pipeline scores → Score history
+```
+HubSpot API → Ingest Function → BigQuery → Pub/Sub → Scoring Function → BigQuery
+```
 
-### **Event-Driven Design:**
-- Ingest completion triggers scoring via Pub/Sub
-- Environment-specific topics ensure isolation
-- Registry system tracks all processing states
+### Components
+- **Ingest Function**: HTTP-triggered Cloud Function that fetches data from HubSpot API
+- **Scoring Function**: Pub/Sub-triggered Cloud Function that processes snapshots and calculates scores
+- **BigQuery**: Data warehouse for storing companies, deals, owners, and scoring results
+- **Pub/Sub**: Event system for triggering scoring pipeline after ingest completion
 
----
+## 📁 Project Structure
 
-## 📁 Directory Structure
-
-```plaintext
-hubspot-pipeline/
+```
+├── deploy.sh                     # Deployment script for all environments
+├── test-ingest.sh                # Cloud Function testing script
+├── main.py                       # Local testing and development interface
 ├── src/
-│   ├── hubspot_pipeline/
-│   │   ├── hubspot_ingest/           # Ingest pipeline (HTTP triggered)
-│   │   │   ├── config_loader.py      # Environment & secret management
-│   │   │   ├── events.py             # Pub/Sub event publishing
-│   │   │   ├── fetcher.py            # HubSpot API client
-│   │   │   ├── main.py               # Ingest function entry point
-│   │   │   ├── reference/            # Reference data (owners, stages)
-│   │   │   ├── registry.py           # Snapshot tracking
-│   │   │   ├── schema.yaml           # Data schema configuration
-│   │   │   ├── store.py              # BigQuery operations
-│   │   │   └── table_checker.py      # Pre-flight validation
-│   │   ├── hubspot_scoring/          # Scoring pipeline (Pub/Sub triggered)
-│   │   │   ├── config.py             # Scoring configuration
-│   │   │   ├── main.py               # Scoring function entry point
-│   │   │   ├── processor.py          # Score calculation logic
-│   │   │   ├── registry.py           # Scoring tracking
-│   │   │   └── stage_mapping.py      # Stage → score mapping
-│   │   ├── excel_import/             # Excel data import utility
-│   │   ├── bigquery_utils.py         # Smart retry & utilities
-│   │   └── schema.py                 # BigQuery schema definitions
-│   ├── ingest_main.py                # Ingest Cloud Function entry
-│   ├── scoring_main.py               # Scoring Cloud Function entry
-│   ├── main.py                       # Local testing & debugging
-│   └── requirements.txt
-├── deploy-ingest.sh                  # Interactive deployment script
-├── test-ingest.sh                    # Enhanced testing script
-└── README.md
+│   ├── ingest_main.py            # Ingest Cloud Function entry point
+│   ├── scoring_main.py           # Scoring Cloud Function entry point
+│   ├── requirements.txt          # Python dependencies
+│   ├── hubspot_pipeline/         # Core production code
+│   │   ├── hubspot_ingest/       # Ingest pipeline modules
+│   │   │   ├── config_loader.py  # Environment & configuration management
+│   │   │   ├── main.py           # Main ingest orchestration
+│   │   │   ├── fetcher.py        # HubSpot API data fetching
+│   │   │   ├── store.py          # BigQuery data storage
+│   │   │   ├── events.py         # Pub/Sub event publishing
+│   │   │   ├── registry.py       # Snapshot tracking and registry
+│   │   │   ├── schema.yaml       # Data schema configuration
+│   │   │   └── reference/        # Reference data management
+│   │   ├── hubspot_scoring/      # Scoring pipeline modules
+│   │   │   ├── config.py         # Scoring configuration management
+│   │   │   ├── main.py           # Main scoring orchestration
+│   │   │   ├── processor.py      # Score calculation engine
+│   │   │   ├── stage_mapping.py  # Lifecycle stage scoring rules
+│   │   │   └── registry.py       # Scoring completion tracking
+│   │   ├── bigquery_utils.py     # Smart retry BigQuery utilities
+│   │   └── schema.py             # Database schema definitions
+│   ├── excel_import/             # Local Excel data import (optional)
+│   └── tests/                    # 🆕 Pytest-based testing framework
+│       ├── conftest.py           # Pytest configuration & fixtures
+│       ├── pytest.ini           # Pytest settings
+│       ├── test_infrastructure.py # Infrastructure connectivity tests
+│       ├── test_database_ops.py  # Database operation tests
+│       ├── test_events.py        # Event system tests
+│       ├── test_logging.py       # Logging system tests
+│       ├── fixtures/             # Test fixtures and utilities
+│       │   ├── test_session.py   # Test session management
+│       │   ├── bigquery_fixtures.py # BigQuery test fixtures
+│       │   └── pubsub_fixtures.py   # Pub/Sub test fixtures
+│       └── markers/              # Custom pytest markers
+│           └── production_safe.py # Production-safe test markers
+└── .github/workflows/            # 🆕 CI/CD automation (planned)
+    └── test-and-deploy.yml       # Automated testing and deployment
 ```
 
----
+## 🚀 Deployment
 
-## 🚀 Quick Start
+### Prerequisites
+- Google Cloud SDK installed and authenticated
+- Project ID: `hubspot-452402`
+- Required APIs enabled: Cloud Functions, BigQuery, Pub/Sub, Secret Manager
 
-### **Prerequisites**
-- Python 3.12+
-- `gcloud` CLI configured with project access
-- `jq` (for enhanced test result parsing)
-
-### **Installation**
+### Deploy Functions
 ```bash
-git clone <repository-url>
-cd hubspot-pipeline
-python -m venv myenv
-source myenv/bin/activate  # On Windows: myenv\Scripts\activate
+# Deploy ingest function
+./deploy.sh ingest [dev|staging|prod]
+
+# Deploy scoring function  
+./deploy.sh scoring [dev|staging|prod]
+
+# Deploy both functions
+./deploy.sh both [dev|staging|prod]
+
+# Interactive mode
+./deploy.sh
+```
+
+### Environment Configuration
+- **Development**: `hubspot-ingest-dev`, dataset: `Hubspot_dev_ob`
+- **Staging**: `hubspot-ingest-staging`, dataset: `Hubspot_staging`  
+- **Production**: `hubspot-ingest-prod`, dataset: `Hubspot_prod`
+
+## 🧪 Testing
+
+### Cloud Function Testing
+```bash
+# Test deployed functions with comprehensive test suite
+./test-ingest.sh [dev|staging|prod]
+
+# Available test types:
+# - ping: Health check
+# - dry-*: Tests without BigQuery writes
+# - real-*: Tests with BigQuery writes
+# - custom: Custom JSON payload
+```
+
+### 🆕 Production-Safe Testing (NEW)
+
+#### Built-in Function Testing
+Both Cloud Functions now include pytest-based testing capabilities:
+
+```bash
+# Test infrastructure (production-safe)
+curl -X POST https://...hubspot-ingest-prod \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "test", "test_type": "infrastructure"}'
+
+# Test database operations (safe)  
+curl -X POST https://...hubspot-ingest-prod \
+  -d '{"mode": "test", "test_type": "database"}'
+
+# Test event system
+curl -X POST https://...hubspot-ingest-prod \
+  -d '{"mode": "test", "test_type": "events"}'
+```
+
+#### Local Development Testing
+```bash
+cd src/
+# Run all production-safe tests
+pytest tests/ -m "production_safe"
+
+# Run infrastructure tests only
+pytest tests/ -m "infrastructure"
+
+# Run with specific environment context
+pytest tests/ --environment=dev -m "database"
+
+# Generate JSON report for CI/CD
+pytest tests/ --json-report --json-report-file=results.json
+```
+
+#### Test Categories & Markers
+- `@pytest.mark.infrastructure` - Connectivity & permissions tests
+- `@pytest.mark.database` - Database operation tests  
+- `@pytest.mark.events` - Event system tests
+- `@pytest.mark.logging` - Logging system tests
+- `@pytest.mark.production_safe` - Safe to run in production
+- `@pytest.mark.production_only` - Should only run in production
+- `@pytest.mark.slow` - Tests taking >30 seconds
+
+## 🔄 Data Flow
+
+### Ingest Pipeline
+1. **HTTP Trigger** → Ingest Cloud Function
+2. **Fetch Data** → HubSpot API (companies, deals, owners, deal stages)
+3. **Store Data** → BigQuery tables with snapshot_id
+4. **Update Registry** → Track snapshot completion
+5. **Publish Event** → Pub/Sub topic for scoring pipeline
+
+### Scoring Pipeline  
+1. **Pub/Sub Event** → Scoring Cloud Function
+2. **Stage Mapping** → Update scoring configuration
+3. **Process Units** → Calculate individual record scores
+4. **Aggregate History** → Summarize scores by owner/stage
+5. **Update Registry** → Track scoring completion
+
+### BigQuery Tables
+- `hs_companies` - Company data snapshots
+- `hs_deals` - Deal data snapshots  
+- `hs_owners` - Owner/user reference data
+- `hs_deal_stage_reference` - Deal pipeline reference data
+- `hs_snapshot_registry` - Snapshot tracking and status
+- `hs_stage_mapping` - Scoring configuration
+- `hs_pipeline_units_snapshot` - Individual unit scores
+- `hs_pipeline_score_history` - Aggregated score history
+
+## 🛠️ Development
+
+### Local Development Setup
+```bash
+# Install dependencies
 pip install -r src/requirements.txt
-```
 
-### **Local Environment Setup**
-```bash
-# Copy and configure environment
+# Set up environment variables
 cp .env.example .env
-# Edit .env with your credentials:
-# HUBSPOT_API_KEY=your-hubspot-key
-# BIGQUERY_PROJECT_ID=your-project-id
-# BIGQUERY_DATASET_ID=Hubspot_dev_ob
+# Edit .env with your credentials
+
+# Run local tests
+cd src/
+python main.py
 ```
 
----
+### 🆕 Future CI/CD Integration (Planned)
 
-## 🛠️ Development & Testing
+#### Automated Testing Pipeline
+- **Pull Request Tests**: Run all non-production tests
+- **Dev Deploy**: Auto-deploy to dev on dev branch
+- **Staging Deploy**: Auto-deploy to staging on staging branch  
+- **Production Deploy**: Deploy to production on main branch after validation
+- **Health Checks**: Scheduled production infrastructure tests
 
-### **Local Testing & Debugging**
+#### Test Strategy by Environment
+- **Development**: Full pipeline tests with real data
+- **Staging**: Performance and integration tests
+- **Production**: Infrastructure and connectivity tests only
+
+## 📊 Monitoring & Logging
+
+### Logging Levels
+- **DEBUG**: Detailed field mappings, API details, performance metrics
+- **INFO**: Standard operations, counts, timing (default for staging)
+- **WARN**: Warnings and errors only (default for production)  
+- **ERROR**: Errors only
+
+### Smart Retry System
+BigQuery operations use intelligent retry logic that:
+- Expects first-attempt failures for new tables (normal BigQuery behavior)
+- Uses appropriate log levels (INFO for expected retries, WARNING for unexpected)
+- Handles streaming buffer timing issues automatically
+
+## 🔐 Security & Permissions
+
+### Service Accounts
+- **Ingest**: `hubspot-{env}@hubspot-452402.iam.gserviceaccount.com`
+- **Scoring**: `hubspot-scoring-{env}@hubspot-452402.iam.gserviceaccount.com`
+
+### Required Permissions
+- BigQuery Data Editor
+- Pub/Sub Publisher (ingest) / Subscriber (scoring)
+- Secret Manager Secret Accessor
+- Cloud Functions Invoker (for Eventarc)
+
+## 🚧 Upcoming Features
+
+### 🆕 Pytest Testing Framework (In Progress)
+- Production-safe infrastructure testing
+- Database operation validation  
+- Event system testing
+- Automated CI/CD integration
+- Performance monitoring and benchmarking
+
+### Excel Import Enhancement
+- Multi-snapshot Excel processing
+- Historical data backfill capabilities
+- Data quality validation and reporting
+
+### Advanced Monitoring
+- Performance benchmarking and trends
+- Automated alerting for failures
+- Cost monitoring and optimization
+- Data freshness monitoring
+
+## 📞 Usage Examples
+
+### Trigger Ingest
 ```bash
-# Interactive testing and debugging tool
-python src/main.py
-
-# Menu-driven interface provides:
-# - Dry run tests (no BigQuery writes)
-# - Real tests with various data volumes
-# - BigQuery table inspection
-# - Dataset cleanup tools
-# - Environment-aware safety checks
-```
-
-### **Cloud Function Testing**
-```bash
-# Enhanced testing script with result parsing
-./test-ingest.sh
-
-# Features:
-# - Environment selection (dev/staging/prod)
-# - Test type selection (ping, dry runs, real runs)
-# - Dynamic log level control
-# - Result parsing and scoring monitoring
-# - BigQuery table status checking
-# - Dataset cleanup capabilities
-```
-
----
-
-## ☁️ Deployment
-
-### **Interactive Deployment**
-```bash
-# Deploy with interactive menus and safety checks
-./deploy-ingest.sh
-
-# Options:
-# - Function selection (ingest/scoring/both)
-# - Environment selection (dev/staging/prod)
-# - Automatic prerequisite checking
-# - Environment-specific confirmations
-# - Post-deployment verification
-```
-
-### **Direct Deployment**
-```bash
-# Deploy specific function to specific environment
-./deploy-ingest.sh ingest dev        # Deploy ingest to dev
-./deploy-ingest.sh scoring staging   # Deploy scoring to staging
-./deploy-ingest.sh both prod         # Deploy both to production
-```
-
-### **Environment Configuration**
-
-| Environment | Ingest Function | Scoring Function | Dataset | Topic |
-|-------------|----------------|------------------|---------|-------|
-| **Dev** | `hubspot-ingest-dev` | `hubspot-scoring-dev` | `Hubspot_dev_ob` | `hubspot-events-dev` |
-| **Staging** | `hubspot-ingest-staging` | `hubspot-scoring-staging` | `Hubspot_staging` | `hubspot-events-staging` |
-| **Prod** | `hubspot-ingest-prod` | `hubspot-scoring-prod` | `Hubspot_prod` | `hubspot-events-prod` |
-
----
-
-## 🔄 Pipeline Flow
-
-### **Ingest Pipeline (HTTP Triggered)**
-1. **HTTP Request** → `hubspot-ingest-{env}`
-2. **Fetch Data** from HubSpot API (companies, deals)
-3. **Update Reference Data** (owners, deal stages)
-4. **Store Snapshots** in BigQuery
-5. **Publish Event** to `hubspot-events-{env}`
-6. **Register Completion** in snapshot registry
-
-### **Scoring Pipeline (Pub/Sub Triggered)**
-1. **Pub/Sub Event** → `hubspot-scoring-{env}`
-2. **Populate Stage Mapping** (lifecycle → scores)
-3. **Calculate Pipeline Units** (company/deal scores)
-4. **Aggregate Score History** (by owner/stage)
-5. **Register Completion** in snapshot registry
-
----
-
-## 🧪 Testing Examples
-
-### **Basic Testing**
-```bash
-# Health check
+# Development test (dry run)
 curl -X POST https://europe-west1-hubspot-452402.cloudfunctions.net/hubspot-ingest-dev \
   -H "Content-Type: application/json" \
-  -d '{"limit": 5, "dry_run": true}'
+  -d '{"limit": 10, "dry_run": true}'
 
-# Small live test
-curl -X POST https://europe-west1-hubspot-452402.cloudfunctions.net/hubspot-ingest-dev \
+# Production sync (all data)
+curl -X POST https://europe-west1-hubspot-452402.cloudfunctions.net/hubspot-ingest-prod \
   -H "Content-Type: application/json" \
-  -d '{"limit": 10, "dry_run": false}'
+  -d '{"no_limit": true, "dry_run": false}'
 ```
 
-### **Using Test Script**
+### 🆕 Test Production Readiness
 ```bash
-# Interactive testing with enhanced result parsing
-./test-ingest.sh dev dry-small     # Safe dry run test
-./test-ingest.sh dev real-tiny     # Small live test
-./test-ingest.sh staging real-medium  # Medium staging test
+# Test infrastructure readiness
+curl -X POST https://europe-west1-hubspot-452402.cloudfunctions.net/hubspot-ingest-prod \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "test", "test_type": "infrastructure"}'
+
+# Test database operations (safe)
+curl -X POST https://europe-west1-hubspot-452402.cloudfunctions.net/hubspot-ingest-prod \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "test", "test_type": "database"}'
 ```
 
----
+### Query Results
+```sql
+-- Get latest snapshot data
+SELECT * FROM `hubspot-452402.Hubspot_prod.hs_companies` 
+WHERE snapshot_id = (
+  SELECT snapshot_id FROM `hubspot-452402.Hubspot_prod.hs_snapshot_registry` 
+  WHERE status LIKE '%completed%' 
+  ORDER BY snapshot_timestamp DESC LIMIT 1
+);
 
-## 🔧 Configuration & Secrets
+-- Get scoring results by owner
+SELECT 
+  owner_id,
+  combined_stage,
+  num_companies,
+  total_score
+FROM `hubspot-452402.Hubspot_prod.hs_pipeline_score_history`
+WHERE snapshot_id = 'latest_snapshot_id'
+ORDER BY total_score DESC;
+```
 
-### **Environment Variables**
-- `HUBSPOT_API_KEY`: HubSpot private app token
-- `BIGQUERY_PROJECT_ID`: GCP project ID
-- `BIGQUERY_DATASET_ID`: BigQuery dataset (auto-detected by environment)
-- `ENVIRONMENT`: Environment override (auto-detected from function name)
-- `LOG_LEVEL`: Logging verbosity (DEBUG/INFO/WARN/ERROR)
+## 🆘 Troubleshooting
 
-### **Secret Management**
-- **Local Development**: Uses `.env` file
-- **Cloud Functions**: Uses Google Secret Manager
-- **Auto-Detection**: Automatically detects GCP vs local environment
+### Common Issues
+1. **BigQuery "Table not ready"**: Normal on first deployment - retry logic handles this
+2. **Pub/Sub permission denied**: Check service account IAM bindings
+3. **Secret Manager access failed**: Verify Secret Manager API enabled and IAM roles
+4. **Function timeout**: Increase timeout or reduce data limit for testing
 
----
+### 🆕 Production Testing Troubleshooting
+1. **Test mode not working**: Verify `{"mode": "test"}` in request body
+2. **Infrastructure tests failing**: Check service account permissions
+3. **Database tests failing**: Verify BigQuery dataset exists and is accessible
+4. **Test cleanup issues**: Check BigQuery delete permissions
 
-## 📊 Monitoring & Observability
-
-### **Logging**
-- **Environment-Aware**: Different log levels per environment
-- **Structured Logging**: JSON format for Cloud Logging
-- **Performance Metrics**: Timing, record counts, API rates
-- **Error Context**: Detailed error information with troubleshooting hints
-
-### **Registry Tracking**
-All snapshots tracked in `hs_snapshot_registry` with:
-- Snapshot timestamps and IDs
-- Processing states (started → ingest_completed → scoring_completed)
-- Record counts and processing notes
-- Error tracking and failure states
-
-### **Monitoring Commands**
+### Debug Commands
 ```bash
-# Monitor function logs
-gcloud logging read 'resource.labels.function_name="hubspot-ingest-dev"' --limit=10
+# Check function logs
+gcloud functions logs read hubspot-ingest-prod --region=europe-west1
 
-# Check recent snapshots
-# Use main.py interactive tool → "View Recent Snapshots"
+# Check BigQuery tables  
+bq ls hubspot-452402:Hubspot_prod
 
-# Check BigQuery tables
-./test-ingest.sh dev check-tables
+# Test connectivity
+gcloud pubsub topics list | grep hubspot
 ```
 
 ---
 
-## 🛡️ Security & Permissions
+## 📋 Development Status
 
-### **Service Account Configuration**
-Each environment uses dedicated service accounts with minimal required permissions:
+### ✅ Completed
+- Ingest pipeline with HubSpot API integration
+- Scoring pipeline with stage mapping
+- Smart retry BigQuery utilities  
+- Event-driven architecture with Pub/Sub
+- Multi-environment deployment system
+- Comprehensive Cloud Function testing tools
+- Registry tracking for data lineage
 
-- **BigQuery**: `jobUser` + `dataEditor` roles
-- **Pub/Sub**: `publisher` role on environment-specific topics
-- **Cloud Run**: `invoker` role for function execution
+### 🔄 In Progress
+- **Pytest testing framework** - Production-safe testing with pytest
+- **CI/CD automation** - GitHub Actions integration
+- **Performance monitoring** - Automated benchmarking
 
-### **Environment Isolation**
-- **Separate Topics**: Each environment publishes to its own Pub/Sub topic
-- **Dedicated Datasets**: Each environment writes to separate BigQuery datasets  
-- **Service Account Separation**: Each environment uses its own service account
-- **No Cross-Environment Triggers**: Dev events don't trigger staging/prod functions
-
----
-
-## 🔄 Data Flow & Schema
-
-### **Core Tables**
-- `hs_companies`: Company snapshots with lifecycle stages
-- `hs_deals`: Deal snapshots with stages and amounts
-- `hs_owners`: Sales rep reference data
-- `hs_deal_stage_reference`: Pipeline stage definitions
-- `hs_snapshot_registry`: Processing state tracking
-
-### **Scoring Tables**
-- `hs_stage_mapping`: Lifecycle stage → score mapping
-- `hs_pipeline_units_snapshot`: Individual company/deal scores
-- `hs_pipeline_score_history`: Aggregated scores by owner/stage
+### 📋 Planned
+- Advanced monitoring and alerting
+- Cost optimization features
+- Data quality validation
+- Historical analysis capabilities
 
 ---
 
-## 🚨 Troubleshooting
-
-### **Common Issues**
-
-#### **403 Authentication Errors**
-```bash
-# Check service account permissions
-gcloud projects get-iam-policy hubspot-452402 --flatten="bindings[].members" --filter="bindings.members:hubspot-dev-ob@hubspot-452402.iam.gserviceaccount.com"
-
-# Grant missing permissions
-gcloud projects add-iam-policy-binding hubspot-452402 --member="serviceAccount:SERVICE_ACCOUNT" --role="ROLE"
-```
-
-#### **Missing Tables**
-```bash
-# Check table status
-./test-ingest.sh dev check-tables
-
-# Tables are auto-created during first run
-# Pre-flight checks validate table readiness
-```
-
-#### **Cross-Environment Issues**
-```bash
-# Verify environment-specific topics
-gcloud eventarc triggers list --location=europe-west1
-
-# Should show separate topics per environment
-```
-
-### **Getting Help**
-- **Interactive Testing**: Use `python src/main.py` for guided debugging
-- **Enhanced Test Script**: Use `./test-ingest.sh` for comprehensive testing
-- **Log Analysis**: Check Cloud Logging for detailed error context
-
----
-
-## 📚 Development Guidelines
-
-### **Code Structure**
-- **Modular Design**: Separate concerns (fetch, store, score, events)
-- **Environment Awareness**: Auto-detect and adapt to deployment context
-- **Error Handling**: Comprehensive error handling with actionable messages
-- **Testing First**: Include dry run modes and extensive testing utilities
-
-### **Deployment Best Practices**
-- **Environment Isolation**: Always use environment-specific resources
-- **Safety Checks**: Multiple confirmation levels for production
-- **Incremental Testing**: Start with dry runs, progress to small live tests
-- **Monitoring**: Verify each step of deployment and testing
-
----
-
-## ⚖️ License
-
-This project is MIT-licensed. See `LICENSE` for details.
+**Last Updated**: December 2024
+**Version**: 2.0 (Testing Framework Integration)

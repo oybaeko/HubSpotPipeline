@@ -1,4 +1,6 @@
-# src/scoring_main.py
+# ===============================================================================
+# src/scoring_main.py - Updated with pytest testing integration
+# ===============================================================================
 
 import logging
 import json
@@ -6,11 +8,10 @@ import base64
 from datetime import datetime
 import functions_framework
 
-# Cloud Functions 2nd gen uses this decorator for Pub/Sub
 @functions_framework.cloud_event
 def main(cloud_event):
     """
-    Scoring Cloud Function entry point for Pub/Sub triggers (2nd gen)
+    Scoring Cloud Function entry point with integrated pytest testing
     
     Args:
         cloud_event: CloudEvent object containing Pub/Sub message
@@ -30,18 +31,24 @@ def main(cloud_event):
     logger.info("📊 Scoring Cloud Function triggered via Pub/Sub (2nd gen)")
     
     try:
-        # Parse CloudEvent (2nd gen format)
+        # Parse CloudEvent
         message = parse_cloud_event(cloud_event)
         if not message:
             logger.error("❌ Could not parse CloudEvent data")
             return {"status": "error", "message": "Invalid event data"}
         
-        logger.info(f"📤 Received event type: {message.get('type', 'unknown')}")
+        event_type = message.get('type', 'unknown')
+        logger.info(f"📤 Received event type: {event_type}")
+        
+        # Check for test request
+        if event_type == 'hubspot.test.request':
+            logger.info("🧪 Test mode detected - running pytest-based tests")
+            return run_pytest_tests(message, logger)
         
         # Check if this is the event we care about
-        if message.get('type') != 'hubspot.snapshot.completed':
-            logger.info(f"ℹ️ Ignoring event type: {message.get('type')}")
-            return {"status": "ignored", "event_type": message.get('type')}
+        if event_type != 'hubspot.snapshot.completed':
+            logger.info(f"ℹ️ Ignoring event type: {event_type}")
+            return {"status": "ignored", "event_type": event_type}
         
         # Extract and validate event data
         event_data = message.get('data', {})
@@ -49,11 +56,10 @@ def main(cloud_event):
             logger.error("❌ No snapshot_id in event data")
             return {"status": "error", "message": "Missing snapshot_id"}
         
-        # Initialize scoring environment
+        # Normal scoring logic
         from hubspot_pipeline.hubspot_scoring.config import init_env
         init_env(log_level='INFO')
         
-        # Process the scoring event
         from hubspot_pipeline.hubspot_scoring.main import process_snapshot_event
         result = process_snapshot_event(event_data)
         
@@ -69,6 +75,93 @@ def main(cloud_event):
             "timestamp": datetime.utcnow().isoformat()
         }
 
+def run_pytest_tests(message: dict, logger) -> dict:
+    """
+    Run pytest-based tests for scoring function
+    
+    Args:
+        message: Parsed Pub/Sub message containing test parameters
+        logger: Logger instance
+        
+    Returns:
+        dict: Test results
+    """
+    test_data = message.get('data', {})
+    test_type = test_data.get('test_type', 'infrastructure')
+    
+    logger.info(f"🧪 Running {test_type} tests via pytest framework")
+    
+    try:
+        # Import and run tests
+        from tests import run_production_tests
+        
+        test_results = run_production_tests(
+            test_type=test_type,
+            function_type='scoring',
+            event_data=test_data
+        )
+        
+        # Log results
+        if test_results['status'] == 'success':
+            logger.info(f"✅ Tests passed: {test_results['summary']['passed']}/{test_results['summary']['total']}")
+        elif test_results['status'] == 'partial_success':
+            logger.warning(f"⚠️ Partial success: {test_results['summary']['failed']} tests failed")
+        else:
+            logger.error(f"❌ Tests failed: {test_results.get('error', 'Unknown error')}")
+        
+        # Format response for Pub/Sub context
+        formatted_response = {
+            'test_mode': True,
+            'function_type': 'scoring',
+            'test_type': test_type,
+            'status': test_results['status'],
+            'summary': test_results['summary'],
+            'environment': _detect_environment_scoring(),
+            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'trigger_type': 'pubsub',
+            'details': {
+                'passed_tests': [t['name'] for t in test_results.get('tests', []) if t['outcome'] == 'passed'],
+                'failed_tests': [
+                    {'name': t['name'], 'error': t['error']} 
+                    for t in test_results.get('tests', []) 
+                    if t['outcome'] == 'failed'
+                ],
+                'skipped_tests': [t['name'] for t in test_results.get('tests', []) if t['outcome'] == 'skipped']
+            }
+        }
+        
+        return formatted_response
+        
+    except ImportError as e:
+        logger.error(f"❌ Testing framework not available: {e}")
+        return {
+            'test_mode': True,
+            'status': 'error',
+            'error': 'pytest testing framework not available in this deployment',
+            'suggestion': 'This function was deployed without testing framework. Redeploy with tests included.',
+            'import_error': str(e)
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Test execution failed: {e}", exc_info=True)
+        return {
+            'test_mode': True,
+            'status': 'error',
+            'error': str(e),
+            'function_type': 'scoring',
+            'test_type': test_type
+        }
+
+def _detect_environment_scoring() -> str:
+    """Detect current environment from Cloud Function context"""
+    import os
+    function_name = os.getenv('K_SERVICE', '')
+    if 'prod' in function_name:
+        return 'production'
+    elif 'staging' in function_name:
+        return 'staging'
+    else:
+        return 'development'
 
 def parse_cloud_event(cloud_event):
     """Parse CloudEvent from 2nd gen Cloud Functions"""
@@ -105,76 +198,45 @@ def parse_cloud_event(cloud_event):
             logger.debug(f"CloudEvent data: {cloud_event.data}")
         return None
 
+# ===============================================================================
+# Helper function to test the scoring function via Pub/Sub message
+# ===============================================================================
 
-# Legacy entry point for 1st gen (in case we need it)
-def main_legacy(event, context):
+def create_test_pubsub_message(test_type: str = 'infrastructure', **kwargs) -> dict:
     """
-    Legacy entry point for 1st gen Cloud Functions
+    Create a test Pub/Sub message for triggering scoring function tests
+    
+    Args:
+        test_type: Type of test to run
+        **kwargs: Additional test parameters
+        
+    Returns:
+        dict: Formatted message for Pub/Sub publishing
     """
-    logger = logging.getLogger('hubspot.scoring.cloudfunction')
-    logger.info("📊 Scoring Cloud Function triggered via Pub/Sub (1st gen)")
+    import json
+    import base64
+    from datetime import datetime
     
-    try:
-        # Parse 1st gen Pub/Sub event
-        message = parse_pubsub_event_legacy(event)
-        if not message:
-            return {"status": "error", "message": "Invalid event data"}
-        
-        # Same processing logic
-        from hubspot_pipeline.hubspot_scoring.config import init_env
-        init_env(log_level='INFO')
-        
-        from hubspot_pipeline.hubspot_scoring.main import process_snapshot_event
-        event_data = message.get('data', {})
-        result = process_snapshot_event(event_data)
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"❌ Legacy scoring function failed: {e}", exc_info=True)
-        return {"status": "error", "error": str(e)}
-
-
-def parse_pubsub_event_legacy(event):
-    """Parse Pub/Sub event data from 1st gen Cloud Functions"""
-    logger = logging.getLogger('hubspot.scoring.cloudfunction')
-    
-    try:
-        if 'data' in event:
-            message_data = base64.b64decode(event['data']).decode('utf-8')
-            message = json.loads(message_data)
-            logger.debug(f"Parsed legacy Pub/Sub message: {message.get('type', 'unknown')}")
-            return message
-        else:
-            logger.warning("No data field in legacy event")
-            return None
-    except Exception as e:
-        logger.error(f"Failed to parse legacy Pub/Sub event: {e}")
-        return None
-
-
-if __name__ == "__main__":
-    # For local testing
-    print("🧪 Testing scoring function locally")
-    
-    # Create a test CloudEvent-like object
-    class MockCloudEvent:
-        def __init__(self, data):
-            self.data = data
-    
-    test_data = {
-        'message': {
-            'data': base64.b64encode(json.dumps({
-                "type": "hubspot.snapshot.completed",
-                "data": {
-                    "snapshot_id": "2025-06-07T10:00:00",
-                    "data_tables": {"hs_companies": 50, "hs_deals": 30},
-                    "reference_tables": {"hs_owners": 6, "hs_deal_stage_reference": 13}
-                }
-            }).encode('utf-8')).decode('utf-8')
+    test_event = {
+        "type": "hubspot.test.request",
+        "version": "1.0",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "source": "test-framework",
+        "data": {
+            "test_type": test_type,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            **kwargs
         }
     }
     
-    mock_event = MockCloudEvent(test_data)
-    result = main(mock_event)
-    print(f"Test result: {result}")
+    # Encode for Pub/Sub
+    message_json = json.dumps(test_event)
+    message_data = base64.b64encode(message_json.encode('utf-8')).decode('utf-8')
+    
+    return {
+        'data': message_data,
+        'attributes': {
+            'eventType': 'hubspot.test.request',
+            'source': 'test-framework'
+        }
+    }
