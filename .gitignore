@@ -40,3 +40,4 @@ Thumbs.db
 *.bak
 *.local
 .ipynb_checkpoints/
+.gitignore

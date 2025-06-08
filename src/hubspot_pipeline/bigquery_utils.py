@@ -1,4 +1,4 @@
-# src/hubspot_pipeline/bigquery_utils.py
+# src/hubspot_pipeline/bigquery_utils.py - Smart retry with intelligent logging
 
 import logging
 import os
@@ -9,7 +9,7 @@ from google.cloud import bigquery
 from google.api_core.exceptions import NotFound, GoogleAPIError
 
 class BigQueryRetryConfig:
-    """Configuration for BigQuery retry behavior"""
+    """Configuration for BigQuery retry behavior with intelligent logging"""
     
     def __init__(self, max_attempts: int = 3, base_delay: float = 2.0, 
                  exponential_backoff: bool = True, retry_exceptions: List[Type[Exception]] = None):
@@ -27,14 +27,7 @@ class BigQueryRetryConfig:
 
 def bigquery_retry(config: BigQueryRetryConfig = None, operation_name: str = "BigQuery operation"):
     """
-    Decorator for adding retry logic to BigQuery operations
-    
-    Args:
-        config: Retry configuration (uses default if None)
-        operation_name: Human-readable name for logging
-        
-    Returns:
-        Decorated function with retry logic
+    Smart retry decorator with intelligent logging that treats first failures as expected
     """
     if config is None:
         config = BigQueryRetryConfig()
@@ -46,34 +39,51 @@ def bigquery_retry(config: BigQueryRetryConfig = None, operation_name: str = "Bi
             
             for attempt in range(1, config.max_attempts + 1):
                 try:
+                    # Log attempt info only for retries (not first attempt)
                     if attempt > 1:
-                        logger.info(f"🔄 Retry attempt {attempt}/{config.max_attempts} for {operation_name}")
+                        if attempt == 2:
+                            logger.info(f"🔄 Retry attempt {attempt}/{config.max_attempts} for {operation_name}")
+                        else:
+                            logger.warning(f"🔄 Multiple retry attempt {attempt}/{config.max_attempts} for {operation_name}")
                     
                     result = func(*args, **kwargs)
                     
-                    # Success!
-                    if attempt > 1:
-                        logger.info(f"🎯 {operation_name} success on attempt {attempt}/{config.max_attempts}")
+                    # Log success with context about retry behavior
+                    if attempt == 1:
+                        # First attempt success - normal operation
+                        logger.debug(f"✅ {operation_name} completed on first attempt")
+                    elif attempt == 2:
+                        # Second attempt success - expected for new tables
+                        logger.info(f"✅ {operation_name} completed on retry (expected for new BigQuery tables)")
+                    else:
+                        # Multiple retries needed - worth noting
+                        logger.info(f"✅ {operation_name} completed after {attempt} attempts")
                     
                     return result
                     
                 except tuple(config.retry_exceptions) as e:
-                    # Retryable error
                     if attempt < config.max_attempts:
+                        # Handle logging based on attempt number
+                        if attempt == 1:
+                            # First failure - expected behavior, use INFO level
+                            logger.info(f"ℹ️ {operation_name}: Expected first-attempt delay (BigQuery table initialization)")
+                        else:
+                            # Second+ failure - unexpected, use WARNING level
+                            logger.warning(f"⚠️ {operation_name}: Unexpected retry needed (attempt {attempt}/{config.max_attempts})")
+                        
                         delay = config.get_delay(attempt)
-                        logger.warning(f"⚠️ {operation_name} failed (attempt {attempt}/{config.max_attempts})")
-                        logger.info(f"⏳ Waiting {delay}s before retry...")
+                        logger.debug(f"⏳ Waiting {delay}s before next attempt...")
                         time.sleep(delay)
                         continue
                     else:
-                        # Final attempt failed
+                        # Final attempt failed - this is a real problem
                         logger.error(f"❌ {operation_name} failed after {config.max_attempts} attempts")
                         logger.error(f"❌ Final error: {e}")
-                        raise RuntimeError(f"{operation_name} timeout after {config.max_attempts} attempts: {e}")
+                        raise RuntimeError(f"{operation_name} failed after {config.max_attempts} attempts: {e}")
                         
                 except Exception as e:
-                    # Non-retryable error
-                    logger.error(f"❌ Non-retryable error in {operation_name} on attempt {attempt}: {e}")
+                    # Non-retryable error - immediate failure
+                    logger.error(f"❌ Non-retryable error in {operation_name} (attempt {attempt}): {e}")
                     raise
             
             # Should never reach here
@@ -83,15 +93,7 @@ def bigquery_retry(config: BigQueryRetryConfig = None, operation_name: str = "Bi
     return decorator
 
 def get_bigquery_client(project_id: Optional[str] = None) -> bigquery.Client:
-    """
-    Create BigQuery client with consistent configuration
-    
-    Args:
-        project_id: Optional project ID (uses env var if not provided)
-        
-    Returns:
-        Configured BigQuery client
-    """
+    """Create BigQuery client with consistent configuration"""
     if project_id is None:
         project_id = os.getenv("BIGQUERY_PROJECT_ID")
         if not project_id:
@@ -101,17 +103,7 @@ def get_bigquery_client(project_id: Optional[str] = None) -> bigquery.Client:
 
 def get_table_reference(table_name: str, dataset: Optional[str] = None, 
                        project_id: Optional[str] = None) -> str:
-    """
-    Build full BigQuery table reference
-    
-    Args:
-        table_name: Name of the table
-        dataset: Dataset name (uses env var if not provided)
-        project_id: Project ID (uses env var if not provided)
-        
-    Returns:
-        Full table reference string (project.dataset.table)
-    """
+    """Build full BigQuery table reference"""
     if project_id is None:
         project_id = os.getenv("BIGQUERY_PROJECT_ID")
         if not project_id:
@@ -122,23 +114,14 @@ def get_table_reference(table_name: str, dataset: Optional[str] = None,
     
     return f"{project_id}.{dataset}.{table_name}"
 
-def insert_rows_with_retry(client: bigquery.Client, table_ref: str, rows: List[Dict[str, Any]], 
-                          operation_name: str = "data insertion") -> None:
+def insert_rows_with_smart_retry(client: bigquery.Client, table_ref: str, rows: List[Dict[str, Any]], 
+                                operation_name: str = "data insertion") -> None:
     """
-    Insert rows to BigQuery with automatic retry logic
-    
-    Args:
-        client: BigQuery client
-        table_ref: Full table reference (project.dataset.table)
-        rows: List of dictionaries to insert
-        operation_name: Description for logging
-        
-    Raises:
-        RuntimeError: If insertion fails after all retries or non-retryable error
+    Insert rows to BigQuery with smart retry logic that expects first-attempt failures
     """
     logger = logging.getLogger('hubspot.bigquery')
     
-    # Create retry configuration for table readiness issues
+    # Create retry configuration optimized for table readiness issues
     config = BigQueryRetryConfig(
         max_attempts=3,
         base_delay=2.0,
@@ -155,22 +138,10 @@ def insert_rows_with_retry(client: bigquery.Client, table_ref: str, rows: List[D
     
     return _insert_operation()
 
-def truncate_and_insert_with_retry(client: bigquery.Client, table_ref: str, rows: List[Dict[str, Any]], 
-                                  operation_name: str = "table replacement") -> int:
+def truncate_and_insert_with_smart_retry(client: bigquery.Client, table_ref: str, rows: List[Dict[str, Any]], 
+                                        operation_name: str = "table replacement") -> int:
     """
-    Truncate table and insert new data with retry logic
-    
-    Args:
-        client: BigQuery client
-        table_ref: Full table reference (project.dataset.table)
-        rows: List of dictionaries to insert
-        operation_name: Description for logging
-        
-    Returns:
-        Number of rows inserted
-        
-    Raises:
-        RuntimeError: If operation fails after all retries
+    Truncate table and insert new data with smart retry logic
     """
     logger = logging.getLogger('hubspot.bigquery')
     
@@ -184,9 +155,9 @@ def truncate_and_insert_with_retry(client: bigquery.Client, table_ref: str, rows
     client.query(truncate_query).result()
     logger.debug("✅ Table truncated")
     
-    # Step 2: Insert with retry
+    # Step 2: Insert with smart retry
     logger.debug(f"⬆️ Inserting {len(rows)} rows")
-    insert_rows_with_retry(client, table_ref, rows, f"{operation_name} for {table_ref}")
+    insert_rows_with_smart_retry(client, table_ref, rows, f"{operation_name} for {table_ref}")
     
     logger.info(f"✅ Successfully replaced {len(rows)} rows in {table_ref}")
     return len(rows)
@@ -195,14 +166,7 @@ def ensure_table_exists(client: bigquery.Client, table_ref: str,
                        schema: List[bigquery.SchemaField]) -> None:
     """
     Ensure BigQuery table exists with correct schema, create if needed
-    
-    Args:
-        client: BigQuery client
-        table_ref: Full table reference (project.dataset.table)
-        schema: List of BigQuery schema fields
-        
-    Raises:
-        RuntimeError: If table creation fails
+    No readiness verification - let the retry logic handle timing issues
     """
     logger = logging.getLogger('hubspot.bigquery')
     
@@ -224,15 +188,7 @@ def ensure_table_exists(client: bigquery.Client, table_ref: str,
             raise RuntimeError(f"Failed to create table: {e}")
 
 def infer_bigquery_type(value: Any) -> str:
-    """
-    Infer BigQuery field type from Python value
-    
-    Args:
-        value: Python value to analyze
-        
-    Returns:
-        BigQuery field type string
-    """
+    """Infer BigQuery field type from Python value"""
     if value is None:
         return "STRING"  # Default for null values
     elif isinstance(value, bool):
@@ -247,15 +203,7 @@ def infer_bigquery_type(value: Any) -> str:
         return "STRING"
 
 def build_schema_from_sample(sample_row: Dict[str, Any]) -> List[bigquery.SchemaField]:
-    """
-    Build BigQuery schema from a sample row
-    
-    Args:
-        sample_row: Dictionary representing a sample data row
-        
-    Returns:
-        List of BigQuery schema fields
-    """
+    """Build BigQuery schema from a sample row"""
     schema_fields = []
     for key, value in sample_row.items():
         field_type = infer_bigquery_type(value)
@@ -272,5 +220,5 @@ INSERT_RETRY_CONFIG = BigQueryRetryConfig(
 QUERY_RETRY_CONFIG = BigQueryRetryConfig(
     max_attempts=2,
     base_delay=1.0,
-    retry_exceptions=[GoogleAPIError]  # Could expand based on needs
+    retry_exceptions=[GoogleAPIError]
 )

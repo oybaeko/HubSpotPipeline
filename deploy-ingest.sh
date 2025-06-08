@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# HubSpot Ingest Function Deployment Script
-# Usage: ./deploy.sh [dev|staging|prod] or interactive menu
+# HubSpot Pipeline Functions Deployment Script
+# Usage: ./deploy.sh [ingest|scoring] [dev|staging|prod] or interactive menu
 
 set -e  # Exit on any error
 
@@ -12,12 +12,56 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Configuration functions - simpler than associative arrays
+# Configuration functions
 function get_function_name() {
-    case $1 in
-        dev) echo "hubspot-ingest-dev" ;;
-        staging) echo "hubspot-ingest-staging" ;;
-        prod) echo "hubspot-ingest-prod" ;;
+    local func_type=$1
+    local env=$2
+    case $func_type in
+        ingest)
+            case $env in
+                dev) echo "hubspot-ingest-dev" ;;
+                staging) echo "hubspot-ingest-staging" ;;
+                prod) echo "hubspot-ingest-prod" ;;
+            esac
+            ;;
+        scoring)
+            case $env in
+                dev) echo "hubspot-scoring-dev" ;;
+                staging) echo "hubspot-scoring-staging" ;;
+                prod) echo "hubspot-scoring-prod" ;;
+            esac
+            ;;
+    esac
+}
+
+function get_entry_point() {
+    local func_type=$1
+    case $func_type in
+        ingest) echo "main" ;;
+        scoring) echo "main" ;;
+    esac
+}
+
+function get_source_file() {
+    local func_type=$1
+    case $func_type in
+        ingest) echo "ingest_main.py" ;;
+        scoring) echo "scoring_main.py" ;;
+    esac
+}
+
+function get_trigger_type() {
+    local func_type=$1
+    case $func_type in
+        ingest) echo "--trigger-http --allow-unauthenticated" ;;
+        scoring) 
+            # Check if we want HTTP or Pub/Sub trigger for scoring
+            if [ "${SCORING_HTTP_MODE:-false}" = "true" ]; then
+                echo "--trigger-http --allow-unauthenticated"
+            else
+                echo "--trigger-topic=hubspot-events"
+            fi
+            ;;
     esac
 }
 
@@ -42,14 +86,56 @@ PROJECT_ID="hubspot-452402"
 REGION="europe-west1"
 RUNTIME="python312"
 SOURCE_DIR="src"
-ENTRY_POINT="main"
 TIMEOUT="540s"
 MEMORY="512MB"
 
 function print_header() {
     echo -e "${BLUE}================================================${NC}"
-    echo -e "${BLUE}    HubSpot Ingest Function Deployment${NC}"
+    echo -e "${BLUE}    HubSpot Pipeline Functions Deployment${NC}"
     echo -e "${BLUE}================================================${NC}"
+}
+
+function show_function_menu() {
+    echo -e "\n${BLUE}🔧 Select function to deploy:${NC}"
+    echo -e "  ${GREEN}1) ingest   ${NC}(Ingest function - HTTP trigger)"
+    echo -e "  ${YELLOW}2) scoring  ${NC}(Scoring function - Pub/Sub trigger)"
+    echo -e "  ${BLUE}3) both     ${NC}(Deploy both functions)"
+    echo -e "  ${BLUE}4) quit     ${NC}(Exit without deploying)"
+    echo ""
+    
+    while true; do
+        read -p "$(echo -e ${GREEN}Choose function [1-4, default=1]: ${NC})" choice
+        
+        # Default to ingest if Enter is pressed
+        if [ -z "$choice" ]; then
+            choice="1"
+        fi
+        
+        case $choice in
+            1|ingest)
+                FUNCTION_TYPE="ingest"
+                echo -e "${GREEN}✅ Selected: Ingest Function${NC}"
+                break
+                ;;
+            2|scoring)
+                FUNCTION_TYPE="scoring"
+                echo -e "${YELLOW}✅ Selected: Scoring Function${NC}"
+                break
+                ;;
+            3|both)
+                FUNCTION_TYPE="both"
+                echo -e "${BLUE}✅ Selected: Both Functions${NC}"
+                break
+                ;;
+            4|quit|q)
+                echo -e "${BLUE}👋 Deployment cancelled${NC}"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}❌ Invalid choice. Please select 1-4.${NC}"
+                ;;
+        esac
+    done
 }
 
 function show_environment_menu() {
@@ -63,7 +149,7 @@ function show_environment_menu() {
     while true; do
         read -p "$(echo -e ${GREEN}Choose environment [1-4, default=1]: ${NC})" choice
         
-        # Default to dev if Enter is pressed (empty input)
+        # Default to dev if Enter is pressed
         if [ -z "$choice" ]; then
             choice="1"
         fi
@@ -95,21 +181,39 @@ function show_environment_menu() {
     done
 }
 
-function validate_environment() {
+function validate_inputs() {
+    if [[ ! "$FUNCTION_TYPE" =~ ^(ingest|scoring|both)$ ]]; then
+        echo -e "${RED}❌ Invalid function type: $FUNCTION_TYPE${NC}"
+        echo -e "${YELLOW}Usage: $0 [ingest|scoring|both] [dev|staging|prod]${NC}"
+        exit 1
+    fi
+    
     if [[ ! "$ENVIRONMENT" =~ ^(dev|staging|prod)$ ]]; then
         echo -e "${RED}❌ Invalid environment: $ENVIRONMENT${NC}"
-        echo -e "${YELLOW}Usage: $0 [dev|staging|prod]${NC}"
+        echo -e "${YELLOW}Usage: $0 [ingest|scoring|both] [dev|staging|prod]${NC}"
         exit 1
     fi
 }
 
 function confirm_deployment() {
-    local env=$1
-    local warning_level=$2
+    local func_type=$1
+    local env=$2
+    local warning_level=$3
     
     echo -e "\n${BLUE}📋 Deployment Summary:${NC}"
+    echo -e "  Function Type: ${YELLOW}$func_type${NC}"
     echo -e "  Environment: ${YELLOW}$env${NC}"
-    echo -e "  Function: $(get_function_name $env)"
+    
+    if [ "$func_type" = "both" ]; then
+        echo -e "  Functions:"
+        echo -e "    - $(get_function_name ingest $env) (HTTP trigger)"
+        echo -e "    - $(get_function_name scoring $env) (Pub/Sub trigger)"
+    else
+        echo -e "  Function: $(get_function_name $func_type $env)"
+        echo -e "  Entry Point: $(get_entry_point $func_type)"
+        echo -e "  Trigger: $(get_trigger_type $func_type)"
+    fi
+    
     echo -e "  Service Account: $(get_service_account $env)"
     echo -e "  Dataset: $(get_dataset $env)"
     echo -e "  Region: $REGION"
@@ -178,87 +282,225 @@ function check_prerequisites() {
         exit 1
     fi
     
-    # Check if main.py exists
-    if [ ! -f "$SOURCE_DIR/main.py" ]; then
-        echo -e "${RED}❌ Entry point '$SOURCE_DIR/main.py' not found${NC}"
+    # Check function-specific files based on what we're deploying
+    if [ "$FUNCTION_TYPE" = "ingest" ] || [ "$FUNCTION_TYPE" = "both" ]; then
+        if [ ! -f "$SOURCE_DIR/ingest_main.py" ]; then
+            echo -e "${RED}❌ Ingest entry point '$SOURCE_DIR/ingest_main.py' not found${NC}"
+            exit 1
+        fi
+    fi
+    
+    if [ "$FUNCTION_TYPE" = "scoring" ] || [ "$FUNCTION_TYPE" = "both" ]; then
+        if [ ! -f "$SOURCE_DIR/scoring_main.py" ]; then
+            echo -e "${RED}❌ Scoring entry point '$SOURCE_DIR/scoring_main.py' not found${NC}"
+            exit 1
+        fi
+    fi
+    
+    # Check if requirements.txt exists
+    if [ ! -f "$SOURCE_DIR/requirements.txt" ]; then
+        echo -e "${RED}❌ Requirements file '$SOURCE_DIR/requirements.txt' not found${NC}"
         exit 1
     fi
     
     echo -e "${GREEN}✅ Prerequisites check passed${NC}"
 }
 
-function deploy_function() {
-    local env=$1
-    local function_name=$(get_function_name $env)
+function prepare_function_source() {
+    local func_type=$1
+    local source_file=$(get_source_file $func_type)
+    
+    echo -e "${BLUE}📁 Preparing source for $func_type function...${NC}"
+    
+    if [ "$func_type" = "scoring" ]; then
+        # Scoring function expects Pub/Sub event signature
+        cat > "$SOURCE_DIR/main.py" << EOF
+# Auto-generated main.py for Cloud Function deployment (Pub/Sub)
+# This file imports and delegates to the scoring function implementation
+
+from ${source_file%.*} import main as original_main
+
+def main(cloud_event):
+    """
+    Cloud Function entry point for Pub/Sub events (2nd gen)
+    """
+    return original_main(cloud_event)
+EOF
+    else
+        # Ingest function expects HTTP request signature
+        cat > "$SOURCE_DIR/main.py" << EOF
+# Auto-generated main.py for Cloud Function deployment (HTTP)
+# This file imports and delegates to the ingest function implementation
+
+from ${source_file%.*} import main as original_main
+
+def main(request):
+    """
+    Cloud Function entry point for HTTP requests
+    """
+    return original_main(request)
+EOF
+    fi
+    
+    echo -e "${GREEN}✅ Created main.py delegation for $func_type${NC}"
+}
+
+function deploy_single_function() {
+    local func_type=$1
+    local env=$2
+    local function_name=$(get_function_name $func_type $env)
+    local entry_point=$(get_entry_point $func_type)
+    local trigger=$(get_trigger_type $func_type)
     local service_account=$(get_service_account $env)
     local dataset=$(get_dataset $env)
     
     echo -e "\n${BLUE}🚀 Deploying $function_name...${NC}"
+    echo -e "${BLUE}   Entry Point: $entry_point${NC}"
+    echo -e "${BLUE}   Trigger: $trigger${NC}"
     
-    gcloud functions deploy $function_name \
+    # Prepare the main.py file for this function type
+    prepare_function_source $func_type
+    
+    # Build the deployment command
+    deploy_cmd="gcloud functions deploy $function_name \
         --runtime $RUNTIME \
-        --trigger-http \
-        --allow-unauthenticated \
+        $trigger \
         --source $SOURCE_DIR \
-        --entry-point $ENTRY_POINT \
+        --entry-point $entry_point \
         --timeout $TIMEOUT \
         --memory $MEMORY \
         --region $REGION \
         --service-account $service_account \
-        --set-env-vars BIGQUERY_DATASET_ID=$dataset \
-        --quiet
+        --set-env-vars BIGQUERY_DATASET_ID=$dataset,BIGQUERY_PROJECT_ID=$PROJECT_ID \
+        --quiet"
     
-    if [ $? -eq 0 ]; then
-        echo -e "\n${GREEN}✅ Deployment successful!${NC}"
-        echo -e "${GREEN}Function URL: https://$REGION-$PROJECT_ID.cloudfunctions.net/$function_name${NC}"
+    # Execute deployment
+    eval $deploy_cmd
+    deployment_result=$?
+    
+    # Clean up the generated main.py
+    if [ -f "$SOURCE_DIR/main.py" ]; then
+        rm "$SOURCE_DIR/main.py"
+        echo -e "${BLUE}🧹 Cleaned up generated main.py${NC}"
+    fi
+    
+    if [ $deployment_result -eq 0 ]; then
+        echo -e "\n${GREEN}✅ $function_name deployed successfully!${NC}"
         
-        # Show test commands
-        echo -e "\n${BLUE}🧪 Test Commands:${NC}"
-        echo -e "${YELLOW}# Safe test (dry run):${NC}"
-        echo "curl -X POST https://$REGION-$PROJECT_ID.cloudfunctions.net/$function_name \\"
-        echo "  -H 'Content-Type: application/json' \\"
-        echo "  -d '{\"limit\": 5, \"dry_run\": true}'"
+        # Apply secure permissions for scoring function
+        if [ "$func_type" = "scoring" ]; then
+            echo -e "${BLUE}🔒 Applying secure permissions for scoring function...${NC}"
+            
+            # Get project number for Eventarc service account
+            project_number=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
+            eventarc_sa="service-${project_number}@gcp-sa-eventarc.iam.gserviceaccount.com"
+            
+            # Grant Eventarc permission to invoke the function
+            gcloud run services add-iam-policy-binding $function_name \
+                --region=$REGION \
+                --member="serviceAccount:$eventarc_sa" \
+                --role="roles/run.invoker" \
+                --quiet
+            
+            echo -e "${GREEN}✅ Secure permissions applied to $function_name${NC}"
+            echo -e "${GREEN}   Eventarc SA: $eventarc_sa${NC}"
+        fi
         
-        if [ "$env" != "prod" ]; then
-            echo -e "\n${YELLOW}# Real test (small):${NC}"
+        if [ "$func_type" = "ingest" ]; then
+            echo -e "${GREEN}Function URL: https://$REGION-$PROJECT_ID.cloudfunctions.net/$function_name${NC}"
+            
+            # Show test commands for ingest function
+            echo -e "\n${BLUE}🧪 Test Commands for $function_name:${NC}"
+            echo -e "${YELLOW}# Safe test (dry run):${NC}"
             echo "curl -X POST https://$REGION-$PROJECT_ID.cloudfunctions.net/$function_name \\"
             echo "  -H 'Content-Type: application/json' \\"
-            echo "  -d '{\"limit\": 10, \"dry_run\": false}'"
+            echo "  -d '{\"limit\": 5, \"dry_run\": true}'"
+            
+            if [ "$env" != "prod" ]; then
+                echo -e "\n${YELLOW}# Real test (small):${NC}"
+                echo "curl -X POST https://$REGION-$PROJECT_ID.cloudfunctions.net/$function_name \\"
+                echo "  -H 'Content-Type: application/json' \\"
+                echo "  -d '{\"limit\": 10, \"dry_run\": false}'"
+            fi
+        else
+            echo -e "${GREEN}Scoring function deployed with secure Pub/Sub trigger${NC}"
+            echo -e "\n${BLUE}🧪 Test by triggering the ingest function to publish events${NC}"
         fi
         
     else
-        echo -e "\n${RED}❌ Deployment failed${NC}"
-        exit 1
+        echo -e "\n${RED}❌ Deployment of $function_name failed${NC}"
+        return 1
+    fi
+}
+
+function deploy_functions() {
+    local func_type=$1
+    local env=$2
+    
+    if [ "$func_type" = "both" ]; then
+        echo -e "\n${BLUE}📦 Deploying both functions...${NC}"
+        
+        # Deploy ingest first
+        deploy_single_function "ingest" "$env"
+        ingest_result=$?
+        
+        # Deploy scoring second
+        deploy_single_function "scoring" "$env"  
+        scoring_result=$?
+        
+        if [ $ingest_result -eq 0 ] && [ $scoring_result -eq 0 ]; then
+            echo -e "\n${GREEN}🎉 Both functions deployed successfully!${NC}"
+        else
+            echo -e "\n${RED}❌ One or more deployments failed${NC}"
+            exit 1
+        fi
+    else
+        deploy_single_function "$func_type" "$env"
+        if [ $? -ne 0 ]; then
+            exit 1
+        fi
     fi
 }
 
 function main() {
     print_header
     
-    # If no argument provided, show interactive menu
+    # Parse command line arguments
     if [ $# -eq 0 ]; then
+        # Interactive mode
+        show_function_menu
         show_environment_menu
+    elif [ $# -eq 1 ]; then
+        # Only function type provided
+        FUNCTION_TYPE=$1
+        validate_inputs
+        show_environment_menu
+    elif [ $# -eq 2 ]; then
+        # Both function type and environment provided
+        FUNCTION_TYPE=$1
+        ENVIRONMENT=$2
+        validate_inputs
+        echo -e "${GREEN}✅ Using command line arguments: $FUNCTION_TYPE -> $ENVIRONMENT${NC}"
     else
-        # Use command line argument
-        ENVIRONMENT=$1
-        validate_environment
-        echo -e "${GREEN}✅ Using command line argument: $ENVIRONMENT${NC}"
+        echo -e "${RED}❌ Too many arguments${NC}"
+        echo -e "${YELLOW}Usage: $0 [ingest|scoring|both] [dev|staging|prod]${NC}"
+        exit 1
     fi
     
     check_prerequisites
     
     case $ENVIRONMENT in
         dev)
-            confirm_deployment "dev" "low"
-            deploy_function "dev"
+            confirm_deployment "$FUNCTION_TYPE" "dev" "low"
+            deploy_functions "$FUNCTION_TYPE" "dev"
             ;;
         staging)
-            confirm_deployment "staging" "medium"
-            deploy_function "staging"
+            confirm_deployment "$FUNCTION_TYPE" "staging" "medium"
+            deploy_functions "$FUNCTION_TYPE" "staging"
             ;;
         prod)
-            confirm_deployment "prod" "high"
-            deploy_function "prod"
+            confirm_deployment "$FUNCTION_TYPE" "prod" "high"
+            deploy_functions "$FUNCTION_TYPE" "prod"
             ;;
     esac
     
@@ -267,22 +509,28 @@ function main() {
 
 # Show help if requested
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
-    echo "HubSpot Ingest Function Deployment Script"
+    echo "HubSpot Pipeline Functions Deployment Script"
     echo ""
-    echo "Usage: $0 [ENVIRONMENT]"
+    echo "Usage: $0 [FUNCTION_TYPE] [ENVIRONMENT]"
     echo ""
     echo "Interactive Mode:"
-    echo "  $0           # Shows menu, dev is default (just press Enter)"
+    echo "  $0                    # Shows menus for both function and environment"
+    echo "  $0 ingest            # Shows environment menu for ingest function"
     echo ""
     echo "Direct Mode:"
-    echo "  $0 dev       # Deploy to dev directly"
-    echo "  $0 staging   # Deploy to staging directly"
-    echo "  $0 prod      # Deploy to production directly"
+    echo "  $0 ingest dev        # Deploy ingest to dev"
+    echo "  $0 scoring staging   # Deploy scoring to staging"
+    echo "  $0 both prod         # Deploy both to production"
+    echo ""
+    echo "Function Types:"
+    echo "  ingest    HTTP-triggered function for data ingestion"
+    echo "  scoring   Pub/Sub-triggered function for data scoring"
+    echo "  both      Deploy both functions"
     echo ""
     echo "Environments:"
-    echo "  dev      Development (minimal guards)"
-    echo "  staging  Staging (medium guards)"  
-    echo "  prod     Production (maximum guards)"
+    echo "  dev       Development (minimal guards)"
+    echo "  staging   Staging (medium guards)"  
+    echo "  prod      Production (maximum guards)"
     exit 0
 fi
 

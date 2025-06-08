@@ -1,4 +1,4 @@
-# src/hubspot_pipeline/hubspot_ingest/store.py
+# src/hubspot_pipeline/hubspot_ingest/store.py - Updated to use smart retry logic
 
 import logging
 import os
@@ -8,11 +8,11 @@ from typing import List, Dict, Any
 from google.cloud import bigquery
 from google.api_core.exceptions import NotFound
 
-# Import our new BigQuery utilities
+# Import our updated BigQuery utilities
 from hubspot_pipeline.bigquery_utils import (
     get_bigquery_client,
     get_table_reference,
-    insert_rows_with_retry,
+    insert_rows_with_smart_retry,  # Updated function name
     ensure_table_exists,
     build_schema_from_sample,
     infer_bigquery_type
@@ -20,7 +20,7 @@ from hubspot_pipeline.bigquery_utils import (
 
 def store_to_bigquery(rows: List[Dict[str, Any]], table_name: str, dataset: str = None) -> None:
     """
-    Write rows to BigQuery with comprehensive logging and retry logic
+    Write rows to BigQuery with smart retry logic that expects first-attempt failures
     
     Args:
         rows: List of dictionaries to insert
@@ -54,10 +54,10 @@ def store_to_bigquery(rows: List[Dict[str, Any]], table_name: str, dataset: str 
         for field in schema_fields:
             logger.debug(f"Field mapping: {field.name} -> {field.field_type}")
 
-    # Check if table exists (should exist due to pre-flight check, but verify)
+    # Check if table exists (simple check - let retry logic handle readiness)
     try:
         existing_table = client.get_table(full_table)
-        logger.debug(f"✅ Table {full_table} exists and ready")
+        logger.debug(f"✅ Table {full_table} exists")
         
         # Verify schema compatibility if in debug mode
         if logger.isEnabledFor(logging.DEBUG):
@@ -83,11 +83,6 @@ def store_to_bigquery(rows: List[Dict[str, Any]], table_name: str, dataset: str 
         logger.info(f"📝 Creating table {full_table}")
         
         ensure_table_exists(client, full_table, schema_fields)
-        
-        # Verify table is ready
-        from .table_checker import verify_table_readiness
-        if not verify_table_readiness(table_name):
-            raise RuntimeError(f"Table {table_name} not ready after creation")
     
     # Prepare data for insertion
     prep_start = datetime.utcnow()
@@ -130,13 +125,13 @@ def store_to_bigquery(rows: List[Dict[str, Any]], table_name: str, dataset: str 
         logger.warning(f"⚠️ No valid rows to insert after processing")
         return
     
-    # Insert data using BigQuery utilities with built-in retry logic
+    # Insert data using smart retry logic
     insert_start = datetime.utcnow()
     logger.info(f"⬆️ Inserting {len(processed_rows)} rows into BigQuery")
     
     try:
-        # Use the utilities function that includes retry logic
-        insert_rows_with_retry(
+        # Use the smart retry function that expects first-attempt failures
+        insert_rows_with_smart_retry(
             client=client,
             table_ref=full_table,
             rows=processed_rows,
@@ -174,7 +169,7 @@ def store_to_bigquery(rows: List[Dict[str, Any]], table_name: str, dataset: str 
 def upsert_to_bigquery(rows: List[Dict[str, Any]], table_name: str, id_field: str, 
                       dataset: str = None) -> int:
     """
-    Upsert rows to BigQuery - update existing, add new, keep deleted
+    Upsert rows to BigQuery with smart retry logic
     CREATES TABLE if it doesn't exist, then performs upsert
     
     Args:

@@ -1,4 +1,4 @@
-# src/hubspot_pipeline/hubspot_ingest/registry.py
+# src/hubspot_pipeline/hubspot_ingest/registry.py - Updated with smart retry
 
 import logging
 import os
@@ -7,11 +7,11 @@ from typing import Dict, Any, Optional
 from google.cloud import bigquery
 from google.api_core.exceptions import NotFound
 
-# Import our new BigQuery utilities
+# Import our updated BigQuery utilities
 from hubspot_pipeline.bigquery_utils import (
     get_bigquery_client,
     get_table_reference,
-    insert_rows_with_retry,
+    insert_rows_with_smart_retry,  # Updated function name
     ensure_table_exists
 )
 from hubspot_pipeline.hubspot_ingest.reference.schemas import SNAPSHOT_REGISTRY_SCHEMA
@@ -19,6 +19,7 @@ from hubspot_pipeline.hubspot_ingest.reference.schemas import SNAPSHOT_REGISTRY_
 def ensure_registry_table_exists() -> None:
     """
     Ensure the snapshot registry table exists with correct schema.
+    Simple existence check - let smart retry handle timing issues.
     """
     logger = logging.getLogger('hubspot.registry')
     
@@ -42,7 +43,7 @@ def ensure_registry_table_exists() -> None:
 
 def register_snapshot_start(snapshot_id: str, triggered_by: str = "manual") -> bool:
     """
-    Register the start of a snapshot process.
+    Register the start of a snapshot process with smart retry logic.
     
     Args:
         snapshot_id: Unique identifier for this snapshot
@@ -67,8 +68,8 @@ def register_snapshot_start(snapshot_id: str, triggered_by: str = "manual") -> b
             "notes": "Snapshot process initiated",
         }
         
-        # Use utilities function with built-in retry logic
-        insert_rows_with_retry(
+        # Use smart retry function that expects first failures as normal
+        insert_rows_with_smart_retry(
             client=client,
             table_ref=table_ref,
             rows=[row],
@@ -86,7 +87,7 @@ def register_snapshot_start(snapshot_id: str, triggered_by: str = "manual") -> b
 def register_snapshot_ingest_complete(snapshot_id: str, data_counts: Dict[str, int], 
                                     reference_counts: Dict[str, int]) -> bool:
     """
-    Register the completion of snapshot ingest phase.
+    Register the completion of snapshot ingest phase with smart retry logic.
     Uses INSERT instead of UPDATE to avoid streaming buffer conflicts.
     
     Args:
@@ -118,8 +119,8 @@ def register_snapshot_ingest_complete(snapshot_id: str, data_counts: Dict[str, i
             "notes": notes,
         }
         
-        # Use utilities function with built-in retry logic
-        insert_rows_with_retry(
+        # Use smart retry function that expects first failures as normal
+        insert_rows_with_smart_retry(
             client=client,
             table_ref=table_ref,
             rows=[completion_row],

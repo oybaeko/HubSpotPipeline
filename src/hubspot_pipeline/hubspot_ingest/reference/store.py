@@ -1,21 +1,22 @@
-# src/hubspot_pipeline/hubspot_ingest/reference/store.py
+# src/hubspot_pipeline/hubspot_ingest/reference/store.py - Updated with smart retry
 
 import logging
 import os
 from typing import List, Dict, Any, Tuple
 from google.cloud import bigquery
 
-# Import our new BigQuery utilities
+# Import our updated BigQuery utilities
 from hubspot_pipeline.bigquery_utils import (
     get_bigquery_client,
     get_table_reference,
-    truncate_and_insert_with_retry,
+    truncate_and_insert_with_smart_retry,  # Updated function name
     ensure_table_exists
 )
 
 def ensure_table_exists_with_schema(table_name: str, schema: List[Tuple[str, str]], dataset: str = None) -> None:
     """
     Ensure BigQuery table exists with correct schema, create if needed.
+    Simple existence check - let smart retry handle timing issues.
     
     Args:
         table_name: Name of the BigQuery table
@@ -38,7 +39,7 @@ def ensure_table_exists_with_schema(table_name: str, schema: List[Tuple[str, str
         for col_name, col_type in schema:
             bq_schema.append(bigquery.SchemaField(col_name, col_type))
         
-        # Use utilities to ensure table exists
+        # Use utilities to ensure table exists (no complex readiness verification)
         ensure_table_exists(client, full_table, bq_schema)
         
         if logger.isEnabledFor(logging.DEBUG):
@@ -48,7 +49,7 @@ def ensure_table_exists_with_schema(table_name: str, schema: List[Tuple[str, str
 def replace_reference_table(rows: List[Dict[str, Any]], table_name: str, 
                           schema: List[Tuple[str, str]], dataset: str = None) -> int:
     """
-    Replace all data in a reference table (truncate + insert) with retry logic.
+    Replace all data in a reference table (truncate + insert) with smart retry logic.
     
     Args:
         rows: List of dictionaries to insert
@@ -72,11 +73,11 @@ def replace_reference_table(rows: List[Dict[str, Any]], table_name: str,
     logger.info(f"🔄 Replacing {len(rows)} rows in {table_name}")
     
     try:
-        # Step 1: Ensure table exists
+        # Step 1: Ensure table exists (simple check)
         ensure_table_exists_with_schema(table_name, schema, dataset)
         
-        # Step 2: Truncate and insert with retry using utilities
-        rows_inserted = truncate_and_insert_with_retry(
+        # Step 2: Truncate and insert with smart retry using utilities
+        rows_inserted = truncate_and_insert_with_smart_retry(
             client=client,
             table_ref=full_table,
             rows=rows,
