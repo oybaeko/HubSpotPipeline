@@ -609,14 +609,15 @@ function show_test_menu() {
     echo -e "\n${BLUE}🛠️  Utilities:${NC}"
     echo -e "  ${CYAN}7) log-level       ${NC}(Change log level - current: ${SESSION_LOG_LEVEL})"
     echo -e "  ${PURPLE}8) check-tables    ${NC}(Check BigQuery table status)"
-    echo -e "  ${RED}9) cleanup         ${NC}(Dataset cleanup)"
-    echo -e "  ${BLUE}10) back           ${NC}(Back to environment selection)"
-    echo -e "  ${BLUE}11) quit           ${NC}(Exit)"
+    echo -e "  ${YELLOW}9) pytest-infra    ${NC}(Run infrastructure pytest tests)"
+    echo -e "  ${RED}10) cleanup        ${NC}(Dataset cleanup)"
+    echo -e "  ${BLUE}11) back           ${NC}(Back to environment selection)"
+    echo -e "  ${BLUE}12) quit           ${NC}(Exit)"
     echo ""
     echo -e "${CYAN}Target: ${url}${NC}"
     
     while true; do
-        read -p "$(echo -e ${GREEN}Choose test [1-11]: ${NC})" choice
+        read -p "$(echo -e ${GREEN}Choose test [1-12]: ${NC})" choice
         
         case $choice in
             1) run_test "$env" "test-deployment" ;;
@@ -645,10 +646,11 @@ function show_test_menu() {
                 ;;
             7) show_log_level_menu "$env" "$SESSION_LOG_LEVEL"; show_test_menu "$env"; return ;;
             8) check_bigquery_tables "$env" ;;
-            9) show_dataset_cleanup_menu "$env"; show_test_menu "$env"; return ;;
-            10) return ;;
-            11|quit|q) echo -e "${BLUE}👋 Testing cancelled${NC}"; exit 0 ;;
-            *) echo -e "${RED}❌ Invalid choice. Please select 1-11.${NC}" ;;
+            9) run_pytest_infrastructure_tests ;;
+            10) show_dataset_cleanup_menu "$env"; show_test_menu "$env"; return ;;
+            11) return ;;
+            12|quit|q) echo -e "${BLUE}👋 Testing cancelled${NC}"; exit 0 ;;
+            *) echo -e "${RED}❌ Invalid choice. Please select 1-12.${NC}" ;;
         esac
         
         echo -e "\n${CYAN}Press Enter to continue...${NC}"
@@ -656,6 +658,68 @@ function show_test_menu() {
         show_test_menu "$env"
         break
     done
+}
+
+function run_pytest_infrastructure_tests() {
+    echo -e "\n${YELLOW}🧪 Running Infrastructure Pytest Tests...${NC}"
+    echo -e "${CYAN}ℹ️  Running: pytest tests/infrastructure/test_gcp_infrastructure_part*.py -v${NC}"
+    echo -e "${CYAN}ℹ️  This will test GCP infrastructure setup and permissions${NC}"
+    
+    # Check if we're in the right directory
+    if [ ! -d "tests/infrastructure" ]; then
+        echo -e "${RED}❌ tests/infrastructure directory not found${NC}"
+        echo -e "${YELLOW}💡 Make sure you're running this from the project root directory${NC}"
+        echo -e "${YELLOW}💡 Current directory: $(pwd)${NC}"
+        return 1
+    fi
+    
+    # Check if test files exist
+    local test_files=$(find tests/infrastructure -name "test_gcp_infrastructure_part*.py" 2>/dev/null)
+    if [ -z "$test_files" ]; then
+        echo -e "${RED}❌ No infrastructure test files found${NC}"
+        echo -e "${YELLOW}💡 Expected files: tests/infrastructure/test_gcp_infrastructure_part*.py${NC}"
+        echo -e "${YELLOW}💡 Make sure you've created the test files as shown in the previous steps${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}✅ Found test files:${NC}"
+    echo "$test_files" | while read file; do
+        echo -e "${GREEN}  • $file${NC}"
+    done
+    
+    # Run the tests
+    echo -e "\n${BLUE}🚀 Executing pytest...${NC}"
+    
+    if command -v pytest &> /dev/null; then
+        # Create results file
+        local timestamp=$(date +"%Y%m%d_%H%M%S")
+        local result_file="$RESULTS_DIR/pytest_infrastructure_${timestamp}.txt"
+        
+        echo -e "${CYAN}Results will be saved to: $result_file${NC}"
+        
+        # Run pytest with verbose output and save results
+        pytest tests/infrastructure/test_gcp_infrastructure_part*.py -v 2>&1 | tee "$result_file"
+        
+        local exit_code=${PIPESTATUS[0]}
+        
+        echo -e "\n${BLUE}📊 Pytest Results Summary:${NC}"
+        if [ $exit_code -eq 0 ]; then
+            echo -e "${GREEN}✅ All tests passed!${NC}"
+        elif [ $exit_code -eq 1 ]; then
+            echo -e "${RED}❌ Some tests failed${NC}"
+            echo -e "${YELLOW}💡 Check the output above for details${NC}"
+        else
+            echo -e "${RED}❌ Pytest encountered an error${NC}"
+            echo -e "${YELLOW}💡 Exit code: $exit_code${NC}"
+        fi
+        
+        echo -e "${GREEN}💾 Full results saved to: $result_file${NC}"
+        
+    else
+        echo -e "${RED}❌ pytest not found${NC}"
+        echo -e "${YELLOW}💡 Install pytest: pip install pytest${NC}"
+        echo -e "${YELLOW}💡 Or run manually: python -m pytest tests/infrastructure/test_gcp_infrastructure_part*.py -v${NC}"
+    fi
 }
 
 function confirm_paging_integration_test() {

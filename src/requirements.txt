@@ -11,3 +11,4 @@ functions-framework>=3.0.0
 # Testing dependencies (required for test mode in Cloud Functions)
 pytest>=7.0.0
 pytest-json-report>=1.5.0
+psutil>=5.8.0
