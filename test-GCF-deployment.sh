@@ -471,14 +471,14 @@ function confirm_and_cleanup_dataset() {
     
     if [ "$env" = "prod" ]; then
         echo -e "${RED}🚨 THIS IS PRODUCTION DATA! 🚨${NC}"
-        read -p "$(echo -e ${RED}Type 'DELETE PRODUCTION $cleanup_type' to continue: ${NC})" confirm
-        if [ "$confirm" != "DELETE PRODUCTION $cleanup_type" ]; then
+        read -p "$(echo -e ${RED}Type \"DELETE PRODUCTION ${cleanup_type}\" to continue: ${NC})" confirm
+        if [ "$confirm" != "DELETE PRODUCTION ${cleanup_type}" ]; then
             echo -e "${YELLOW}❌ Cleanup cancelled${NC}"
             return
         fi
     else
-        read -p "$(echo -e ${YELLOW}Type 'DELETE $cleanup_type' to continue: ${NC})" confirm
-        if [ "$confirm" != "DELETE $cleanup_type" ]; then
+        read -p "$(echo -e ${YELLOW}Type \"DELETE ${cleanup_type}\" to continue: ${NC})" confirm
+        if [ "$confirm" != "DELETE ${cleanup_type}" ]; then
             echo -e "${YELLOW}❌ Cleanup cancelled${NC}"
             return
         fi
