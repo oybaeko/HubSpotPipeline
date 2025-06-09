@@ -71,7 +71,7 @@ def fetch_deal_stages() -> List[Dict[str, Any]]:
     """
     logger = logging.getLogger('hubspot.reference')
     
-    api_key = os.getenv('HUBSPOT_API_KEY')
+    api_key = get_hubspot_api_key_for_test(test_logger)
     if not api_key:
         logger.error("HUBSPOT_API_KEY not found in environment")
         raise RuntimeError("HUBSPOT_API_KEY not found in environment")

@@ -11,6 +11,33 @@ import logging
 from datetime import datetime
 from typing import Optional, Dict, Any
 
+def get_hubspot_api_key_for_test(test_logger):
+    """
+    Get HubSpot API key for testing, works in both GCF and local environments
+    Fails if key is not available (configuration problem)
+    """
+    # First check if already available
+    api_key = os.getenv('HUBSPOT_API_KEY')
+    if api_key:
+        test_logger.debug("HUBSPOT_API_KEY already available in environment")
+        return api_key
+    
+    # Try to initialize environment (handles both GCP and local)
+    try:
+        from hubspot_pipeline.hubspot_ingest.config_loader import init_env
+        test_logger.debug("Initializing environment for API key access")
+        init_env()
+        api_key = get_hubspot_api_key_for_test(test_logger)
+        
+        if api_key:
+            test_logger.info("✅ HUBSPOT_API_KEY loaded successfully")
+            return api_key
+        else:
+            pytest.fail("HUBSPOT_API_KEY not available after environment initialization")
+            
+    except Exception as e:
+        pytest.fail(f"Failed to load HUBSPOT_API_KEY: {e}")
+
 # ===============================================================================
 # HubSpot API Environment Validation
 # ===============================================================================
@@ -26,7 +53,7 @@ def test_hubspot_api_companies_endpoint(test_logger, function_type):
     
     try:
         import requests
-        api_key = os.getenv('HUBSPOT_API_KEY')
+        api_key = get_hubspot_api_key_for_test(test_logger)
         
         if not api_key:
             test_logger.error("❌ HUBSPOT_API_KEY not available")
@@ -69,8 +96,7 @@ def test_hubspot_api_deals_endpoint(test_logger, function_type):
     
     try:
         import requests
-        api_key = os.getenv('HUBSPOT_API_KEY')
-        
+        api_key = get_hubspot_api_key_for_test(test_logger)        
         if not api_key:
             pytest.skip("HUBSPOT_API_KEY not available")
         
@@ -105,7 +131,7 @@ def test_hubspot_api_owners_endpoint(test_logger, function_type):
     
     try:
         import requests
-        api_key = os.getenv('HUBSPOT_API_KEY')
+        api_key = get_hubspot_api_key_for_test(test_logger)
         
         if not api_key:
             pytest.skip("HUBSPOT_API_KEY not available")
@@ -140,8 +166,7 @@ def test_hubspot_api_pipelines_endpoint(test_logger, function_type):
     
     try:
         import requests
-        api_key = os.getenv('HUBSPOT_API_KEY')
-        
+        api_key = get_hubspot_api_key_for_test(test_logger)        
         if not api_key:
             pytest.skip("HUBSPOT_API_KEY not available")
         

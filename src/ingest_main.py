@@ -1,5 +1,5 @@
 # ===============================================================================
-# src/ingest_main.py - Updated with simplified two-tier testing
+# src/ingest_main.py - Updated with simplified two-tier testing (legacy removed)
 # ===============================================================================
 
 import logging
@@ -60,13 +60,12 @@ def run_two_tier_tests(data: dict, logger, function_type: str) -> tuple:
     """
     test_type = data.get('test_type', 'deployment')
     
-    # Map old test types to new two-tier system
-    if test_type in ['infrastructure', 'database', 'events', 'logging', 'all_safe']:
-        tier = 'deployment'  # Tier 1: Environment-specific validation
-    elif test_type in ['runtime', 'mechanisms']:
-        tier = 'runtime'     # Tier 2: Basic runtime validation
+    # Validate test type - allow deployment, runtime, or integration
+    if test_type not in ['deployment', 'runtime', 'integration']:
+        logger.warning(f"Invalid test_type '{test_type}', defaulting to 'deployment'")
+        tier = 'deployment'
     else:
-        tier = 'deployment'  # Default to deployment validation
+        tier = test_type
     
     logger.info(f"🧪 Running {tier} validation (test_type: {test_type})")
     

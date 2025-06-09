@@ -6,6 +6,7 @@
 import pytest
 import os
 import uuid
+import logging
 from datetime import datetime
 from typing import Generator, TYPE_CHECKING
 
@@ -82,10 +83,8 @@ def safe_test_id() -> str:
     return f"test_{timestamp}_{random_suffix}"
 
 @pytest.fixture(scope="function")
-def test_logger() -> Generator[object, None, None]:
+def test_logger() -> Generator[logging.Logger, None, None]:
     """Provide a test-specific logger"""
-    import logging
-    
     logger = logging.getLogger('hubspot.test')
     logger.setLevel(logging.DEBUG)
     
@@ -95,3 +94,9 @@ def test_logger() -> Generator[object, None, None]:
         formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
         handler.setFormatter(formatter)
         logger.addHandler(handler)
+    
+    yield logger  # This was missing!
+    
+    # Optional cleanup - remove handlers after test
+    # for handler in logger.handlers[:]:
+    #     logger.removeHandler(handler)

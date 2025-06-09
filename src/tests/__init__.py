@@ -1,12 +1,15 @@
 # ===============================================================================
 # src/tests/__init__.py
-# Two-Tier Environment Validation Framework
+# Two-Tier Environment Validation Framework + Integration Tests
 # ===============================================================================
 
 import logging
 import json
 import sys
 import io
+import os
+import tempfile
+import re
 from contextlib import redirect_stdout, redirect_stderr
 from typing import Dict, Any, Optional
 
@@ -14,13 +17,14 @@ def run_production_tests(test_type: str = 'deployment',
                         function_type: str = 'unknown', 
                         **kwargs) -> Dict[str, Any]:
     """
-    Two-tier environment validation entry point.
+    Two-tier environment validation + integration testing entry point.
     
     Tier 1: deployment_validation - "Will THIS deployment work in THIS environment?"
     Tier 2: runtime_validation - "Can the Python code execute at all?"
+    Integration: integration_tests - "Does the end-to-end pipeline work?"
     
     Args:
-        test_type: 'deployment' (environment-specific) or 'runtime' (basic sanity)
+        test_type: 'deployment' (environment-specific), 'runtime' (basic sanity), or 'integration' (e2e)
         function_type: 'ingest' or 'scoring' for function-specific validation
         **kwargs: Additional parameters passed to tests
         
@@ -37,8 +41,13 @@ def run_production_tests(test_type: str = 'deployment',
             'function_type': function_type
         }
     
+    # Extract record limit for integration tests
+    record_limit = None
+    if test_type == 'integration':
+        record_limit = _extract_record_limit(kwargs)
+    
     # Build pytest arguments based on test tier
-    pytest_args = _build_pytest_args(test_type, function_type, kwargs)
+    pytest_args = _build_pytest_args(test_type, function_type, record_limit)
     
     # Capture pytest output
     stdout_capture = io.StringIO()
@@ -54,20 +63,24 @@ def run_production_tests(test_type: str = 'deployment',
     
     # Set up temporary results file if JSON report available
     results_file = None
-    if json_report_available:
-        import tempfile
-        import os
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            results_file = f.name
-        
-        # Add JSON report to pytest args
-        pytest_args.extend([
-            '--json-report',
-            f'--json-report-file={results_file}'
-        ])
+    env_var_set = False
     
     try:
+        if json_report_available:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                results_file = f.name
+            
+            # Add JSON report to pytest args
+            pytest_args.extend([
+                '--json-report',
+                f'--json-report-file={results_file}'
+            ])
+        
+        # Set environment variable for integration tests
+        if record_limit is not None:
+            os.environ['E2E_RECORD_LIMIT'] = str(record_limit)
+            env_var_set = True
+        
         # Capture output and run pytest
         with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
             exit_code = pytest.main(pytest_args)
@@ -85,7 +98,7 @@ def run_production_tests(test_type: str = 'deployment',
         test_results.update({
             'test_type': test_type,
             'function_type': function_type,
-            'validation_tier': 'deployment' if test_type == 'deployment' else 'runtime',
+            'validation_tier': test_type,  # For integration, tier == test_type
             'stdout': stdout_capture.getvalue(),
             'stderr': stderr_capture.getvalue() if exit_code != 0 else None
         })
@@ -108,9 +121,48 @@ def run_production_tests(test_type: str = 'deployment',
                 os.unlink(results_file)
             except:
                 pass
+        
+        # Cleanup environment variable
+        if env_var_set:
+            try:
+                del os.environ['E2E_RECORD_LIMIT']
+            except:
+                pass
 
-def _build_pytest_args(test_type: str, function_type: str, kwargs: Dict[str, Any]) -> list:
-    """Build pytest command line arguments for two-tier testing"""
+def _extract_record_limit(kwargs: Dict[str, Any]) -> Optional[int]:
+    """Extract record limit from request/event data"""
+    # Try different sources for record limit
+    record_limit = None
+    
+    # From request_data (HTTP requests)
+    request_data = kwargs.get('request_data', {})
+    if isinstance(request_data, dict):
+        record_limit = request_data.get('record_limit')
+        if record_limit is None:
+            # Also check for no_limit flag
+            if request_data.get('no_limit'):
+                record_limit = 0  # 0 means no limit
+    
+    # From event_data (Pub/Sub events) if not found in request_data
+    if record_limit is None:
+        event_data = kwargs.get('event_data', {})
+        if isinstance(event_data, dict):
+            record_limit = event_data.get('record_limit')
+            if record_limit is None and event_data.get('no_limit'):
+                record_limit = 0
+    
+    # Validate and convert to int
+    if record_limit is not None:
+        try:
+            return int(record_limit)
+        except (ValueError, TypeError):
+            logging.warning(f"Invalid record_limit value: {record_limit}")
+            return None
+    
+    return None
+
+def _build_pytest_args(test_type: str, function_type: str, record_limit: Optional[int]) -> list:
+    """Build pytest command line arguments for three-tier testing"""
     
     args = [
         '--tb=short',           # Short traceback format
@@ -128,7 +180,6 @@ def _build_pytest_args(test_type: str, function_type: str, kwargs: Dict[str, Any
     args.extend(['--environment', env])
     
     # Specify test directory relative to this file
-    import os
     test_dir = os.path.dirname(__file__)
     
     # Select appropriate test file based on tier
@@ -140,8 +191,14 @@ def _build_pytest_args(test_type: str, function_type: str, kwargs: Dict[str, Any
         # Tier 2: Basic runtime/mechanism validation
         test_file = os.path.join(test_dir, 'runtime_validation.py')
         args.append(test_file)
+    elif test_type == 'integration':
+        # Integration: End-to-end pipeline testing
+        test_file = os.path.join(test_dir, 'integration_tests.py')
+        args.append(test_file)
+        # Only run the main integration test
+        args.extend(['-k', 'test_end_to_end_pipeline_with_limit'])
     else:
-        # Fallback: run both tiers
+        # Fallback: run both deployment and runtime tiers
         args.append(test_dir)
         args.extend(['-m', 'production_safe'])
     
@@ -149,8 +206,6 @@ def _build_pytest_args(test_type: str, function_type: str, kwargs: Dict[str, Any
 
 def _detect_environment() -> str:
     """Detect current environment from Cloud Function context"""
-    import os
-    
     function_name = os.getenv('K_SERVICE', '')
     if 'prod' in function_name:
         return 'production'
@@ -161,8 +216,6 @@ def _detect_environment() -> str:
 
 def _parse_pytest_output_fallback(stdout: str, stderr: str, exit_code: int) -> Dict[str, Any]:
     """Parse pytest output when JSON report is not available"""
-    import re
-    
     # Try to extract test results from stdout
     total_tests = 0
     passed = 0
