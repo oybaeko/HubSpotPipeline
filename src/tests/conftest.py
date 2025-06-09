@@ -1,6 +1,6 @@
 # ===============================================================================
 # src/tests/conftest.py  
-# Simplified pytest configuration for two-tier validation
+# Updated pytest configuration with limit parameter
 # ===============================================================================
 
 import pytest
@@ -26,6 +26,13 @@ def pytest_addoption(parser):
         action="store", 
         default="development",
         help="Environment: development, staging, or production"
+    )
+    parser.addoption(
+        "--limit",
+        action="store",
+        type=int,
+        default=5,
+        help="Record limit for integration tests (default: 5)"
     )
 
 def pytest_configure(config):
@@ -57,6 +64,11 @@ def function_type(request) -> str:
 def environment(request) -> str:
     """Fixture to get the current environment (development/staging/production)"""
     return request.config.getoption("--environment")
+
+@pytest.fixture(scope="session")
+def limit(request) -> int:
+    """Fixture to get the record limit for integration tests"""
+    return request.config.getoption("--limit")
 
 @pytest.fixture(scope="session")
 def test_session(environment) -> Generator["TestSession", None, None]:

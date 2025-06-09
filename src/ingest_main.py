@@ -1,5 +1,5 @@
 # ===============================================================================
-# src/ingest_main.py - Updated with simplified two-tier testing (legacy removed)
+# src/ingest_main.py - Fixed parameter passing for test framework
 # ===============================================================================
 
 import logging
@@ -34,7 +34,16 @@ def main(request: Request):
     # Check for test mode
     if data.get('mode') == 'test':
         logger.info("🧪 Test mode detected - running two-tier validation")
-        return run_two_tier_tests(data, logger, 'ingest')
+        # Extract test parameters from data
+        test_type = data.get('test_type', 'deployment')
+        function_type = 'ingest'
+        
+        # Pass data as request_data in kwargs
+        return run_two_tier_tests(
+            test_type=test_type,
+            function_type=function_type, 
+            request_data=data  # ← Fixed: pass data as request_data
+        )
     
     # Normal production logic
     try:
@@ -46,28 +55,27 @@ def main(request: Request):
         logger.error(f"❌ Ingest failed: {e}", exc_info=True)
         return f"Ingest error: {e}", 500
 
-def run_two_tier_tests(data: dict, logger, function_type: str) -> tuple:
+def run_two_tier_tests(test_type: str = 'deployment', 
+                      function_type: str = 'unknown', 
+                      **kwargs) -> tuple:
     """
     Run two-tier validation tests
     
     Args:
-        data: Request data containing test parameters
-        logger: Logger instance
+        test_type: Type of test ('deployment', 'runtime', or 'integration')
         function_type: Type of function ('ingest' or 'scoring')
+        **kwargs: Additional parameters including request_data
         
     Returns:
         tuple: (response_data, status_code)
     """
-    test_type = data.get('test_type', 'deployment')
+    logger = logging.getLogger('hubspot.ingest.cloudfunction')
+    logger.info(f"🧪 Running {test_type} validation for {function_type} function")
     
-    # Validate test type - allow deployment, runtime, or integration
-    if test_type not in ['deployment', 'runtime', 'integration']:
-        logger.warning(f"Invalid test_type '{test_type}', defaulting to 'deployment'")
-        tier = 'deployment'
-    else:
-        tier = test_type
-    
-    logger.info(f"🧪 Running {tier} validation (test_type: {test_type})")
+    # Log the parameters being passed
+    logger.info(f"🔧 Test parameters: test_type={test_type}, function_type={function_type}")
+    if 'request_data' in kwargs:
+        logger.info(f"📦 Request data keys: {list(kwargs['request_data'].keys())}")
     
     try:
         # Add current directory to Python path for imports
@@ -87,32 +95,32 @@ def run_two_tier_tests(data: dict, logger, function_type: str) -> tuple:
                 'error': 'Two-tier testing framework not available in this deployment',
                 'error_type': 'ImportError',
                 'suggestion': 'Redeploy with updated deploy.sh script that includes tests directory',
-                'tier': tier,
+                'test_type': test_type,
                 'function_type': function_type
             }, 501
         
-        # Run appropriate tier
+        # Run appropriate test with corrected parameters
         test_results = run_production_tests(
-            test_type=tier,
+            test_type=test_type,
             function_type=function_type,
-            request_data=data
+            **kwargs  # ← This now includes request_data correctly
         )
         
         # Determine HTTP status code
         if test_results['status'] == 'success':
             status_code = 200
-            logger.info(f"✅ {tier.title()} validation passed: {test_results['summary']['passed']}/{test_results['summary']['total']}")
+            logger.info(f"✅ {test_type.title()} validation passed: {test_results['summary']['passed']}/{test_results['summary']['total']}")
         elif test_results['status'] == 'partial_success':
             status_code = 206  # Partial Content
-            logger.warning(f"⚠️ {tier.title()} validation partial: {test_results['summary']['failed']} tests failed")
+            logger.warning(f"⚠️ {test_type.title()} validation partial: {test_results['summary']['failed']} tests failed")
         else:
             status_code = 500
-            logger.error(f"❌ {tier.title()} validation failed: {test_results.get('error', 'Unknown error')}")
+            logger.error(f"❌ {test_type.title()} validation failed: {test_results.get('error', 'Unknown error')}")
         
         # Format response
         formatted_response = {
             'test_mode': True,
-            'validation_tier': tier,
+            'validation_tier': test_type,
             'function_type': function_type,
             'test_type': test_type,
             'status': test_results['status'],
@@ -122,7 +130,7 @@ def run_two_tier_tests(data: dict, logger, function_type: str) -> tuple:
             'framework_info': {
                 'tier_1_deployment': 'Environment-specific validation',
                 'tier_2_runtime': 'Basic mechanism validation',
-                'current_tier': tier,
+                'current_tier': test_type,
                 'test_discovery': f"Found {test_results['summary']['total']} tests"
             },
             'details': {
@@ -139,16 +147,15 @@ def run_two_tier_tests(data: dict, logger, function_type: str) -> tuple:
         return formatted_response, status_code
         
     except Exception as e:
-        logger.error(f"❌ Test execution failed: {e}", exc_info=True)
+        logger.error(f"💥 Test framework exception: {e}", exc_info=True)
         
         error_response = {
             'test_mode': True,
             'status': 'error', 
             'error': str(e),
             'error_type': type(e).__name__,
-            'validation_tier': tier,
-            'function_type': function_type,
-            'test_type': test_type
+            'test_type': test_type,
+            'function_type': function_type
         }
         
         return error_response, 500

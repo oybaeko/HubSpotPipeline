@@ -1,6 +1,6 @@
 # ===============================================================================
 # src/tests/integration_tests.py (FIXED VERSION)
-# End-to-End Pipeline Integration Tests with Better Error Handling
+# End-to-End Pipeline Integration Tests with Thread-Safe Limit Parameter
 # ===============================================================================
 
 import pytest
@@ -15,7 +15,7 @@ from typing import Dict, Any, Optional
 
 @pytest.mark.deployment
 @pytest.mark.production_safe
-def test_end_to_end_pipeline_with_limit(test_logger, environment, function_type, safe_test_id):
+def test_end_to_end_pipeline_with_limit(test_logger, environment, function_type, safe_test_id, limit):
     """
     End-to-end pipeline test with configurable record limit
     
@@ -37,9 +37,9 @@ def test_end_to_end_pipeline_with_limit(test_logger, environment, function_type,
         test_logger.info("ℹ️ End-to-end test only applicable to ingest function")
         pytest.skip("End-to-end pipeline test only runs for ingest function")
     
-    # Get record limit from environment or use default
-    record_limit = int(os.getenv('E2E_RECORD_LIMIT', '5'))
-    test_logger.info(f"🎯 Testing with record limit: {record_limit}")
+    # Use limit from pytest fixture (thread-safe)
+    test_logger.info(f"🎯 Testing with limit from fixture: {limit}")
+    test_logger.info(f"✅ Thread-safe parameter passing - no environment variables used")
     
     try:
         # Initialize the pipeline environment
@@ -55,7 +55,7 @@ def test_end_to_end_pipeline_with_limit(test_logger, environment, function_type,
         
         # Prepare event data for the pipeline
         event_data = {
-            'limit': record_limit,
+            'limit': limit,  # Pass as 'limit' parameter that pipeline expects
             'dry_run': False,  # Real run - data will be written
             'log_level': 'INFO',
             'trigger_source': f'integration_test_{safe_test_id}',
@@ -63,6 +63,7 @@ def test_end_to_end_pipeline_with_limit(test_logger, environment, function_type,
         }
         
         test_logger.info(f"🚀 Executing pipeline with event: {event_data}")
+        test_logger.info(f"🎯 Limit parameter (thread-safe): limit={limit}")
         
         # Execute the pipeline
         start_time = datetime.utcnow()
@@ -127,8 +128,15 @@ def test_end_to_end_pipeline_with_limit(test_logger, environment, function_type,
             test_logger.warning("⚠️ Pipeline completed but no records were processed")
             # Don't fail the test - this might be expected if no new data
         
-        if total_records > record_limit:
-            test_logger.warning(f"⚠️ More records processed ({total_records}) than limit ({record_limit})")
+        # Check limit compliance (should FAIL test if exceeded)
+        if total_records > limit:
+            test_logger.error(f"❌ Limit violation: {total_records} records > {limit} limit")
+            test_logger.error("💡 Pipeline is not respecting the limit parameter")
+            test_logger.error("🔧 Check the fetcher.py limit enforcement logic")
+            pytest.fail(f"Limit exceeded: got {total_records} records but limit was {limit}")
+        else:
+            test_logger.info(f"✅ Limit respected: {total_records} <= {limit}")
+            test_logger.info(f"🎯 Perfect compliance: {((limit - total_records) / limit * 100):.1f}% under limit")
         
         # Verify data was written to BigQuery (with better error handling)
         test_logger.info("🗄️ Verifying data was written to BigQuery")
@@ -143,6 +151,7 @@ def test_end_to_end_pipeline_with_limit(test_logger, environment, function_type,
         test_logger.info(f"📈 Summary: {total_records} records processed in {execution_time:.2f}s")
         test_logger.info(f"💾 Data persisted in {environment} environment tables")
         test_logger.info(f"🔍 Snapshot ID for inspection: {snapshot_id}")
+        test_logger.info(f"🎯 Limit parameter worked: {limit} (thread-safe)")
         
         # Log test metadata (don't return from pytest test function)
         test_metadata = {
@@ -151,7 +160,8 @@ def test_end_to_end_pipeline_with_limit(test_logger, environment, function_type,
             'execution_time': execution_time,
             'results_breakdown': results_breakdown,
             'environment': environment,
-            'record_limit': record_limit
+            'limit': limit,
+            'thread_safe_params': True
         }
         
         test_logger.info(f"🎯 Test completed successfully with metadata: {test_metadata}")

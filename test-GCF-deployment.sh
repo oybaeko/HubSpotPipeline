@@ -242,38 +242,26 @@ function run_test() {
     echo -e "${CYAN}URL: $url${NC}"
     echo -e "${CYAN}Results: $result_file${NC}"
     
+    # Build payload based on test type
+    local payload
+    
     case $test_type in
         # Two-Tier Testing Framework Tests
         test-deployment)
             echo -e "${PURPLE}🧪 Deployment Validation (Tier 1)${NC}"
             echo -e "${CYAN}ℹ️  Tests environment-specific configuration and connectivity${NC}"
-            curl -X POST "$url" \
-                -H "Content-Type: application/json" \
-                -d "{\"mode\": \"test\", \"test_type\": \"deployment\"}" \
-                -w "\n⏱️  Total time: %{time_total}s | HTTP: %{http_code}\n" \
-                -o "$result_file" \
-                2>"$curl_output"
+            payload='{"mode": "test", "test_type": "deployment"}'
             ;;
         test-runtime)
             echo -e "${PURPLE}🧪 Runtime Validation (Tier 2)${NC}"
             echo -e "${CYAN}ℹ️  Tests basic Python runtime and mechanism functionality${NC}"
-            curl -X POST "$url" \
-                -H "Content-Type: application/json" \
-                -d "{\"mode\": \"test\", \"test_type\": \"runtime\"}" \
-                -w "\n⏱️  Total time: %{time_total}s | HTTP: %{http_code}\n" \
-                -o "$result_file" \
-                2>"$curl_output"
+            payload='{"mode": "test", "test_type": "runtime"}'
             ;;
         
         # Basic Functional Tests
         ping)
             echo -e "${BLUE}📡 Health Check${NC}"
-            curl -X POST "$url" \
-                -H "Content-Type: application/json" \
-                -d "{\"log_level\": \"$log_level\"}" \
-                -w "\n⏱️  Total time: %{time_total}s | HTTP: %{http_code}\n" \
-                -o "$result_file" \
-                2>"$curl_output"
+            payload="{\"log_level\": \"$log_level\"}"
             ;;
         integration)
             echo -e "${GREEN}🔄 Integration Test${NC}"
@@ -284,14 +272,26 @@ function run_test() {
                 confirm_production_integration_test "$record_limit"
             fi
             
-            curl -X POST "$url" \
-                -H "Content-Type: application/json" \
-                -d "{\"mode\": \"test\", \"test_type\": \"integration\", \"record_limit\": $record_limit}" \
-                -w "\n⏱️  Total time: %{time_total}s | HTTP: %{http_code}\n" \
-                -o "$result_file" \
-                2>"$curl_output"
+            payload="{\"mode\": \"test\", \"test_type\": \"integration\", \"record_limit\": $record_limit}"
             ;;
     esac
+    
+    # Display the full curl command that will be executed
+    echo -e "\n${BLUE}📤 Full curl command:${NC}"
+    echo -e "${CYAN}curl -X POST '$url' \\${NC}"
+    echo -e "${CYAN}  -H 'Content-Type: application/json' \\${NC}"
+    echo -e "${CYAN}  -d '$payload' \\${NC}"
+    echo -e "${CYAN}  -w '\\n⏱️  Total time: %{time_total}s | HTTP: %{http_code}\\n' \\${NC}"
+    echo -e "${CYAN}  -o '$result_file'${NC}"
+    echo ""
+    
+    # Execute the curl command
+    curl -X POST "$url" \
+        -H "Content-Type: application/json" \
+        -d "$payload" \
+        -w "\n⏱️  Total time: %{time_total}s | HTTP: %{http_code}\n" \
+        -o "$result_file" \
+        2>"$curl_output"
     
     # Show curl metrics
     echo -e "\n${BLUE}📡 Request Details:${NC}"
@@ -343,14 +343,22 @@ function run_integration_test() {
     local payload
     if [ "$record_limit" -eq 0 ]; then
         # Full sync - no limit
-        payload="{\"mode\": \"test\", \"test_type\": \"integration\", \"no_limit\": true}"
+        payload='{"mode": "test", "test_type": "integration", "no_limit": true}'
     else
         # Limited records
         payload="{\"mode\": \"test\", \"test_type\": \"integration\", \"record_limit\": $record_limit}"
     fi
     
-    echo -e "${BLUE}📤 Payload: $payload${NC}"
+    # Display the full curl command that will be executed
+    echo -e "\n${BLUE}📤 Full curl command:${NC}"
+    echo -e "${CYAN}curl -X POST '$url' \\${NC}"
+    echo -e "${CYAN}  -H 'Content-Type: application/json' \\${NC}"
+    echo -e "${CYAN}  -d '$payload' \\${NC}"
+    echo -e "${CYAN}  -w '\\n⏱️  Total time: %{time_total}s | HTTP: %{http_code}\\n' \\${NC}"
+    echo -e "${CYAN}  -o '$result_file'${NC}"
+    echo ""
     
+    # Execute the curl command
     curl -X POST "$url" \
         -H "Content-Type: application/json" \
         -d "$payload" \
@@ -367,7 +375,6 @@ function run_integration_test() {
     
     echo -e "\n${GREEN}💾 Results saved to: $result_file${NC}"
 }
-
 function check_bigquery_tables() {
     local env=$1
     local dataset=$(get_dataset_for_env "$env")
