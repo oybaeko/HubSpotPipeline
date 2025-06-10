@@ -1,28 +1,30 @@
 #!/usr/bin/env python3
 """
-Local Excel import script for HubSpot pipeline - Companies and Deals only.
-This script is designed for local use only and should not be deployed to GCP.
+Complete Excel import script for HubSpot pipeline with CRM metadata support.
+This script uses actual CRM file download timestamps as snapshot_id while getting data from Excel.
 
 Usage:
     python import_excel.py path/to/hubspot_export.xlsx
     python import_excel.py path/to/hubspot_export.xlsx --dry-run
     python import_excel.py path/to/hubspot_export.xlsx --mode auto
-    python import_excel.py path/to/hubspot_export.xlsx --mode snapshots
+    python import_excel.py path/to/hubspot_export.xlsx --mode snapshots --crm-metadata /tmp/crm_metadata.json
 """
 
 import sys
 import os
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 import argparse
+import json
 
 # Add src to path for local imports
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from hubspot_pipeline.excel_import import ExcelProcessor, SnapshotProcessor
-from hubspot_pipeline.excel_import.data_mapper import map_excel_to_schema, get_snapshot_configurations
-from hubspot_pipeline.excel_import.bigquery_loader import load_to_bigquery, load_multiple_snapshots
+# Fixed imports to match actual file structure
+from excel_import import ExcelProcessor, SnapshotProcessor
+from excel_import.data_mapper import map_excel_to_schema, get_snapshot_configurations
+from excel_import.bigquery_loader import load_to_bigquery, load_multiple_snapshots
 
 def setup_environment():
     """Setup environment for local BigQuery access"""
@@ -42,7 +44,7 @@ def setup_environment():
     load_dotenv()
     
     # Verify required environment variables
-    required_vars = ["BIGQUERY_PROJECT_ID", "BIGQUERY_DATASET_ID", "GOOGLE_APPLICATION_CREDENTIALS"]
+    required_vars = ["BIGQUERY_PROJECT_ID", "BIGQUERY_DATASET_ID"]
     missing = [var for var in required_vars if not os.getenv(var)]
     
     if missing:
@@ -50,13 +52,27 @@ def setup_environment():
         logging.error("Please ensure your .env file contains:")
         logging.error("- BIGQUERY_PROJECT_ID=your-project-id")
         logging.error("- BIGQUERY_DATASET_ID=your-dataset-id") 
-        logging.error("- GOOGLE_APPLICATION_CREDENTIALS=path/to/service-account.json")
+        if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+            logging.warning("- GOOGLE_APPLICATION_CREDENTIALS not set (will use default credentials)")
         sys.exit(1)
+
+def load_crm_metadata(crm_metadata_file: str) -> dict:
+    """Load CRM metadata from JSON file"""
+    if not crm_metadata_file or not os.path.exists(crm_metadata_file):
+        return {}
+    
+    try:
+        with open(crm_metadata_file, 'r') as f:
+            data = json.load(f)
+            return data.get('crm_file_metadata', {})
+    except Exception as e:
+        logging.warning(f"⚠️  Could not load CRM metadata from {crm_metadata_file}: {e}")
+        return {}
 
 def main():
     """Main CLI entry point"""
     parser = argparse.ArgumentParser(
-        description="Import HubSpot Excel exports to BigQuery (Companies and Deals)",
+        description="Import HubSpot Excel exports to BigQuery with CRM metadata support",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Import Modes:
@@ -64,9 +80,13 @@ Import Modes:
   auto        Auto-detect HubSpot sheets and import as single snapshot
   validate    Validate Excel file structure without importing
 
+CRM Metadata:
+  --crm-metadata   JSON file with CRM file timestamps (replaces snapshot_id with actual CRM timestamps)
+
 Examples:
   python import_excel.py hubspot_export.xlsx --dry-run
   python import_excel.py hubspot_export.xlsx --mode snapshots
+  python import_excel.py hubspot_export.xlsx --mode snapshots --crm-metadata /tmp/crm_metadata.json
   python import_excel.py hubspot_export.xlsx --mode auto --snapshot-id "manual-import"
   python import_excel.py hubspot_export.xlsx --mode validate
         """
@@ -76,6 +96,7 @@ Examples:
     parser.add_argument("--mode", choices=["snapshots", "auto", "validate"], default="snapshots",
                        help="Import mode (default: snapshots)")
     parser.add_argument("--snapshot-id", help="Custom snapshot ID for auto mode (default: current timestamp)")
+    parser.add_argument("--crm-metadata", help="JSON file containing CRM file metadata with timestamps")
     parser.add_argument("--dry-run", action="store_true", 
                        help="Preview data without writing to BigQuery")
     parser.add_argument("--log-level", default="INFO", 
@@ -114,6 +135,8 @@ Examples:
     logger.info(f"📂 Excel file: {excel_path.absolute()}")
     logger.info(f"🔧 Mode: {args.mode}")
     logger.info(f"🛑 Dry run: {'Yes' if args.dry_run else 'No'}")
+    if args.crm_metadata:
+        logger.info(f"📄 CRM metadata: {args.crm_metadata}")
     if args.mode != "validate":
         logger.info(f"📊 Project: {os.getenv('BIGQUERY_PROJECT_ID')}")
         logger.info(f"📊 Dataset: {os.getenv('BIGQUERY_DATASET_ID')}")
@@ -125,9 +148,9 @@ Examples:
         if args.mode == "validate":
             _validate_mode(processor, logger)
         elif args.mode == "snapshots":
-            _snapshots_mode(processor, logger, args.dry_run)
+            _snapshots_mode(processor, logger, args.dry_run, args.crm_metadata)
         elif args.mode == "auto":
-            _auto_mode(processor, logger, args.snapshot_id, args.dry_run)
+            _auto_mode(processor, logger, args.snapshot_id, args.dry_run, args.crm_metadata)
         
     except KeyboardInterrupt:
         logger.info("⚠️ Import cancelled by user")
@@ -188,9 +211,19 @@ def _validate_mode(processor: ExcelProcessor, logger):
     
     logger.info("\n✅ VALIDATION COMPLETED")
 
-def _snapshots_mode(processor: ExcelProcessor, logger, dry_run: bool):
-    """Snapshots mode - import configured snapshots"""
+def _snapshots_mode(processor: ExcelProcessor, logger, dry_run: bool, crm_metadata_file: str = None):
+    """Snapshots mode - import configured snapshots with optional CRM timestamps"""
     logger.info("📸 SNAPSHOTS MODE - Importing configured snapshots")
+    
+    # Load CRM metadata if provided
+    crm_metadata = {}
+    if crm_metadata_file:
+        crm_metadata = load_crm_metadata(crm_metadata_file)
+        if crm_metadata:
+            logger.info(f"✅ Loaded CRM metadata for {len(crm_metadata)} snapshots")
+            logger.info("🕐 Will use actual CRM file download timestamps as snapshot_id")
+        else:
+            logger.warning("⚠️  No CRM metadata loaded, using standard snapshot processing")
     
     # Validate first
     found_sheets, missing_sheets = processor.validate_snapshot_sheets()
@@ -202,21 +235,46 @@ def _snapshots_mode(processor: ExcelProcessor, logger, dry_run: bool):
     
     # Process all snapshots
     snapshot_processor = SnapshotProcessor(processor)
-    result = snapshot_processor.process_all_snapshots()
+    
+    if crm_metadata:
+        # Use CRM metadata for timestamp-based snapshots
+        result = snapshot_processor.process_all_snapshots_with_crm_metadata(crm_metadata)
+    else:
+        # Use standard processing
+        result = snapshot_processor.process_all_snapshots()
     
     # Load to BigQuery
     snapshots_data = result['snapshots']
     load_multiple_snapshots(snapshots_data, dry_run=dry_run)
+    
+    # Enhanced summary
+    if crm_metadata:
+        logger.info("=" * 60)
+        logger.info("📊 CRM METADATA IMPORT SUMMARY")
+        logger.info("=" * 60)
+        logger.info(f"📸 Snapshots with CRM timestamps: {len(snapshots_data)}")
+        
+        # Show sample of CRM timestamps used
+        sample_snapshots = list(snapshots_data.keys())[:3]
+        for snapshot_id in sample_snapshots:
+            logger.info(f"📅 Sample snapshot_id: {snapshot_id}")
+        
+        logger.info("✅ All snapshot_id values are actual CRM file download timestamps")
+        logger.info("=" * 60)
 
-def _auto_mode(processor: ExcelProcessor, logger, snapshot_id: str, dry_run: bool):
+def _auto_mode(processor: ExcelProcessor, logger, snapshot_id: str, dry_run: bool, crm_metadata_file: str = None):
     """Auto mode - auto-detect and import as single snapshot"""
     logger.info("🔍 AUTO MODE - Auto-detecting HubSpot sheets")
     
-    # Generate snapshot ID
+    # Generate snapshot ID with explicit UTC timezone
     if not snapshot_id:
-        snapshot_id = datetime.utcnow().isoformat(timespec='seconds')
+        snapshot_id = datetime.now(timezone.utc).isoformat(timespec='seconds')
     
     logger.info(f"📸 Using snapshot ID: {snapshot_id}")
+    
+    # Note: CRM metadata is not used in auto mode since it's for single snapshot
+    if crm_metadata_file:
+        logger.warning("⚠️  CRM metadata file ignored in auto mode (single snapshot)")
     
     # Auto-detect sheets
     sheet_data = processor.extract_hubspot_sheets()

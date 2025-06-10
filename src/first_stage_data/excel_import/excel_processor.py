@@ -1,4 +1,4 @@
-# src/hubspot_pipeline/excel_import/excel_processor.py
+# src/excel_import/excel_processor.py
 import pandas as pd
 import logging
 from typing import Dict, List, Any, Tuple
@@ -306,6 +306,100 @@ class SnapshotProcessor:
             'summary': summary,
             'totals': {
                 'snapshots': len(snapshots_data),
+                'companies': total_companies,
+                'deals': total_deals,
+                'total_records': total_companies + total_deals
+            }
+        }
+    
+    def process_all_snapshots_with_crm_metadata(self, crm_metadata: Dict[str, Dict]) -> Dict[str, Dict[str, Any]]:
+        """
+        Process all configured snapshots with CRM metadata and return summary
+        
+        Args:
+            crm_metadata: Dictionary of snapshot_date -> CRM file metadata
+        
+        Returns:
+            Dictionary with processing summary for each snapshot with CRM timestamps
+        """
+        self.logger.info("🚀 Starting multi-snapshot processing with CRM metadata")
+        
+        # Validate sheets exist first
+        found_sheets, missing_sheets = self.excel_processor.validate_snapshot_sheets()
+        
+        if missing_sheets:
+            self.logger.warning(f"⚠️ Missing {len(missing_sheets)} expected sheets:")
+            for sheet in missing_sheets[:5]:  # Show first 5
+                self.logger.warning(f"  • {sheet}")
+            if len(missing_sheets) > 5:
+                self.logger.warning(f"  • ... and {len(missing_sheets) - 5} more")
+        
+        if not found_sheets:
+            raise RuntimeError("No expected snapshot sheets found in Excel file")
+        
+        self.logger.info(f"✅ Found {len(found_sheets)} expected sheets")
+        
+        # Extract all snapshots
+        excel_snapshots_data = self.excel_processor.extract_all_snapshots()
+        
+        if not excel_snapshots_data:
+            raise RuntimeError("No valid snapshot data extracted from Excel file")
+        
+        # Process snapshots with CRM metadata
+        snapshots_data_with_crm = {}
+        summary = {}
+        total_companies = 0
+        total_deals = 0
+        matched_snapshots = 0
+        
+        for snapshot_date, excel_data in excel_snapshots_data.items():
+            companies_count = len(excel_data.get('companies', []))
+            deals_count = len(excel_data.get('deals', []))
+            
+            # Check if we have CRM metadata for this snapshot
+            if snapshot_date in crm_metadata:
+                crm_info = crm_metadata[snapshot_date]
+                crm_snapshot_id = crm_info['snapshot_id']
+                
+                self.logger.info(f"📸 Snapshot {snapshot_date}: Using CRM timestamp {crm_snapshot_id}")
+                
+                # Use CRM timestamp as the key for snapshots_data
+                snapshots_data_with_crm[crm_snapshot_id] = excel_data
+                
+                summary[snapshot_date] = {
+                    'companies': companies_count,
+                    'deals': deals_count,
+                    'total': companies_count + deals_count,
+                    'crm_snapshot_id': crm_snapshot_id,
+                    'company_file': crm_info.get('company_file', ''),
+                    'deals_file': crm_info.get('deals_file', ''),
+                    'company_timestamp': crm_info.get('company_timestamp', ''),
+                    'deals_timestamp': crm_info.get('deals_timestamp', '')
+                }
+                
+                matched_snapshots += 1
+            else:
+                self.logger.warning(f"⚠️ No CRM metadata found for snapshot {snapshot_date}, skipping")
+                continue
+            
+            total_companies += companies_count
+            total_deals += deals_count
+        
+        self.logger.info(f"📊 Processing summary with CRM metadata:")
+        self.logger.info(f"  • {len(excel_snapshots_data)} Excel snapshots")
+        self.logger.info(f"  • {matched_snapshots} matched with CRM metadata")
+        self.logger.info(f"  • {total_companies} total company records")
+        self.logger.info(f"  • {total_deals} total deal records")
+        self.logger.info(f"  • {total_companies + total_deals} total records")
+        
+        if matched_snapshots == 0:
+            raise RuntimeError("No snapshots could be matched with CRM metadata")
+        
+        return {
+            'snapshots': snapshots_data_with_crm,  # Now keyed by CRM timestamps
+            'summary': summary,
+            'totals': {
+                'snapshots': matched_snapshots,
                 'companies': total_companies,
                 'deals': total_deals,
                 'total_records': total_companies + total_deals

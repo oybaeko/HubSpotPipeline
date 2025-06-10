@@ -44,3 +44,14 @@ Thumbs.db
 
 # Ignore excel import files
 *.xlsx
+build-staging/build-staging.sh
+build-staging/schema-compatibility-check.sh
+build-staging/staging-tables.sh
+test-results/dev_integration_small_20250610_191100_curl.txt
+test-results/dev_integration_small_20250610_191100.json
+test-results/dev_integration_small_20250610_204816_curl.txt
+test-results/dev_integration_small_20250610_204816.json
+test-results/dev_integration_small_20250610_215523_curl.txt
+test-results/dev_integration_small_20250610_215523.json
+test-results/dev_integration_small_20250611_071339_curl.txt
+test-results/dev_integration_small_20250611_071339.json

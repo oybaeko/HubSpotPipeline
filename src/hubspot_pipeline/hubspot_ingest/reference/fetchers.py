@@ -29,7 +29,7 @@ def fetch_owners() -> List[Dict[str, Any]]:
     logger.info("📊 Fetching owners from HubSpot...")
     
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
         
         data = response.json()
@@ -71,7 +71,8 @@ def fetch_deal_stages() -> List[Dict[str, Any]]:
     """
     logger = logging.getLogger('hubspot.reference')
     
-    api_key = get_hubspot_api_key_for_test(test_logger)
+    # Fixed: Use the same API key retrieval as fetch_owners()
+    api_key = os.getenv('HUBSPOT_API_KEY')
     if not api_key:
         logger.error("HUBSPOT_API_KEY not found in environment")
         raise RuntimeError("HUBSPOT_API_KEY not found in environment")
@@ -83,21 +84,35 @@ def fetch_deal_stages() -> List[Dict[str, Any]]:
     }
     
     logger.info("📊 Fetching deal stages from HubSpot...")
+    logger.debug(f"Making request to: {url}")
     
     try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
+        response = requests.get(url, headers=headers, timeout=30)
+        
+        logger.info(f"📡 Pipelines API response: {response.status_code}")
+        
+        if response.status_code != 200:
+            logger.error(f"❌ Failed to fetch pipelines: {response.status_code}")
+            logger.error(f"❌ Response headers: {dict(response.headers)}")
+            logger.error(f"❌ Response body: {response.text[:500]}...")
+            response.raise_for_status()  # This will raise the appropriate exception
         
         data = response.json()
         pipelines = data.get("results", [])
+        
+        logger.info(f"📊 Received {len(pipelines)} pipelines from API")
+        logger.debug(f"📋 Pipeline IDs: {[p.get('id') for p in pipelines]}")
         
         # Transform pipelines to stage records
         stage_records = []
         for pipeline in pipelines:
             pipeline_id = str(pipeline.get("id"))
             pipeline_label = pipeline.get("label")
+            stages = pipeline.get("stages", [])
             
-            for stage in pipeline.get("stages", []):
+            logger.debug(f"Pipeline '{pipeline_label}' ({pipeline_id}): {len(stages)} stages")
+            
+            for stage in stages:
                 # Handle boolean conversion properly
                 is_closed_raw = stage.get("metadata", {}).get("isClosed", False)
                 if isinstance(is_closed_raw, str):
@@ -115,6 +130,9 @@ def fetch_deal_stages() -> List[Dict[str, Any]]:
                     "display_order": int(stage.get("displayOrder", 0))
                 }
                 stage_records.append(record)
+                
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"  Stage: {record['stage_label']} ({record['stage_id']})")
         
         logger.info(f"✅ Fetched {len(stage_records)} deal stages from {len(pipelines)} pipelines")
         return stage_records

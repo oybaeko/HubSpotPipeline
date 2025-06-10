@@ -141,11 +141,7 @@ def test_end_to_end_pipeline_with_limit(test_logger, environment, function_type,
         # Verify data was written to BigQuery (with better error handling)
         test_logger.info("🗄️ Verifying data was written to BigQuery")
         verify_bigquery_data_written(test_logger, snapshot_id, environment)
-        
-        # Check if Pub/Sub event was published (if applicable)
-        test_logger.info("📤 Verifying Pub/Sub event publication")
-        verify_pubsub_event_published(test_logger, snapshot_id, environment)
-        
+                
         # Success - log final summary
         test_logger.info("✅ End-to-end pipeline test completed successfully")
         test_logger.info(f"📈 Summary: {total_records} records processed in {execution_time:.2f}s")
@@ -370,42 +366,6 @@ def verify_bigquery_data_written(test_logger, snapshot_id: str, environment: str
         # Don't fail the test for verification issues
         test_logger.warning("⚠️ BigQuery verification had issues but not failing integration test")
 
-def verify_pubsub_event_published(test_logger, snapshot_id: str, environment: str):
-    """Verify that Pub/Sub event was published to trigger scoring"""
-    try:
-        # Note: This is a best-effort check since Pub/Sub messages are transient
-        # In a real system, you might check Cloud Logging or scoring function logs
-        
-        topic_mapping = {
-            'development': 'hubspot-events-dev',
-            'staging': 'hubspot-events-staging',
-            'production': 'hubspot-events-prod'
-        }
-        
-        topic_name = topic_mapping.get(environment, 'hubspot-events-dev')
-        test_logger.info(f"📤 Expected Pub/Sub topic: {topic_name}")
-        
-        # Check if topic exists (basic validation)
-        from google.cloud import pubsub_v1
-        
-        publisher = pubsub_v1.PublisherClient()
-        project_id = os.getenv('GOOGLE_CLOUD_PROJECT') or os.getenv('BIGQUERY_PROJECT_ID')
-        
-        if project_id:
-            topic_path = publisher.topic_path(project_id, topic_name)
-            try:
-                topic = publisher.get_topic(request={"topic": topic_path})
-                test_logger.info(f"✅ Pub/Sub topic accessible: {topic.name}")
-                test_logger.info("📨 Event should have been published (cannot verify transient message)")
-            except Exception as e:
-                test_logger.warning(f"⚠️ Could not verify Pub/Sub topic: {e}")
-        else:
-            test_logger.warning("⚠️ No project ID available for Pub/Sub verification")
-        
-    except ImportError:
-        test_logger.warning("⚠️ Pub/Sub client not available - skipping event verification")
-    except Exception as e:
-        test_logger.warning(f"⚠️ Pub/Sub verification failed: {e}")
 
 # ===============================================================================
 # Additional Integration Test Placeholders

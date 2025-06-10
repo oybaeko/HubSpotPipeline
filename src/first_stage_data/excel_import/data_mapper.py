@@ -1,8 +1,8 @@
-# src/hubspot_pipeline/excel_import/data_mapper.py
+# src/excel_import/data_mapper.py
 import pandas as pd
 import logging
 from typing import Dict, List, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .schema import (
     EXCEL_COMPANY_FIELD_MAP, 
@@ -16,7 +16,7 @@ def map_excel_to_schema(sheet_data: Dict[str, pd.DataFrame], snapshot_id: str) -
     
     Args:
         sheet_data: Dictionary of sheet_name -> DataFrame
-        snapshot_id: Unique identifier for this import batch
+        snapshot_id: Unique identifier for this import batch (UTC timezone or CRM timestamp)
         
     Returns:
         Dictionary of table_name -> list of records ready for BigQuery
@@ -40,6 +40,26 @@ def map_excel_to_schema(sheet_data: Dict[str, pd.DataFrame], snapshot_id: str) -
             logger.debug(f"Columns: {list(df.columns)}")
     
     return mapped_data
+
+def map_excel_to_schema_with_crm_snapshot(sheet_data: Dict[str, pd.DataFrame], 
+                                        excel_snapshot_date: str, 
+                                        crm_snapshot_id: str) -> Dict[str, List[Dict]]:
+    """
+    Map Excel sheet data to BigQuery schema using CRM timestamp as snapshot_id
+    
+    Args:
+        sheet_data: Dictionary of sheet_name -> DataFrame
+        excel_snapshot_date: Original Excel snapshot date (for logging)
+        crm_snapshot_id: CRM file timestamp to use as snapshot_id
+        
+    Returns:
+        Dictionary of table_name -> list of records ready for BigQuery
+    """
+    logger = logging.getLogger('hubspot.excel_import')
+    logger.info(f"🔄 Mapping Excel data from {excel_snapshot_date} with CRM timestamp {crm_snapshot_id}")
+    
+    # Use the standard mapping function with CRM timestamp
+    return map_excel_to_schema(sheet_data, crm_snapshot_id)
 
 def get_snapshot_configurations() -> List[Dict]:
     """Return the hardcoded list of snapshots to import"""
@@ -93,10 +113,7 @@ def _map_company_data(df: pd.DataFrame, snapshot_id: str) -> List[Dict]:
                 if excel_col in df.columns:
                     value = row[excel_col]
                     
-                    if bq_col == 'timestamp':
-                        # Skip timestamp if not in table schema
-                        continue
-                    elif bq_col == 'lifecycle_stage':
+                    if bq_col == 'lifecycle_stage':
                         record[bq_col] = _normalize_lifecycle_stage(value)
                     elif bq_col == 'lead_status':
                         record[bq_col] = _normalize_lead_status(value)
@@ -159,9 +176,7 @@ def _map_deal_data(df: pd.DataFrame, snapshot_id: str) -> List[Dict]:
                 if excel_col in df.columns:
                     value = row[excel_col]
                     
-                    if bq_col == 'timestamp':
-                        record[bq_col] = _parse_timestamp(value)
-                    elif bq_col == 'amount':
+                    if bq_col == 'amount':
                         record[bq_col] = _parse_amount(value)
                     elif bq_col in ['deal_id', 'associated_company_id']:
                         record[bq_col] = _safe_string_id(value)
@@ -177,10 +192,7 @@ def _map_deal_data(df: pd.DataFrame, snapshot_id: str) -> List[Dict]:
                         value = row[similar_col]
                         logger.debug(f"Using similar column '{similar_col}' for '{excel_col}'")
                         
-                        if bq_col == 'timestamp':
-                            # Skip timestamp if not in table schema
-                            continue
-                        elif bq_col == 'amount':
+                        if bq_col == 'amount':
                             record[bq_col] = _parse_amount(value)
                         elif bq_col in ['deal_id', 'associated_company_id']:
                             record[bq_col] = _safe_string_id(value)
@@ -287,31 +299,6 @@ def _normalize_lead_status(value) -> Optional[str]:
     }
     
     return status_mapping.get(normalized, normalized)
-
-def _parse_timestamp(value) -> Optional[str]:
-    """Parse timestamp from Excel date/datetime to ISO format"""
-    if pd.isna(value):
-        return None
-    
-    try:
-        # Handle different timestamp formats
-        if isinstance(value, str):
-            # Try parsing ISO format first
-            if 'T' in value:
-                dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
-            else:
-                dt = pd.to_datetime(value)
-        else:
-            # pandas datetime or other datetime object
-            dt = pd.to_datetime(value)
-        
-        # Convert to UTC ISO format for BigQuery
-        return dt.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
-        
-    except Exception as e:
-        logger = logging.getLogger('hubspot.excel_import')
-        logger.warning(f"⚠️ Could not parse timestamp '{value}': {e}")
-        return None
 
 def _safe_record_preview(record: Dict) -> Dict:
     """Create a safe preview of record for logging (truncate long values)"""
