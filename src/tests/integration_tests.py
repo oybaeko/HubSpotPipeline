@@ -23,6 +23,7 @@ def test_end_to_end_pipeline_with_limit(test_logger, environment, function_type,
     - Only runs in dev/staging environments (skips prod)
     - Uses actual production tables (no cleanup)
     - Configurable record limit for different test scenarios
+    - FIXED: Properly handles limit=0 as unlimited
     - Returns detailed results for inspection
     """
     test_logger.info("🔄 Starting end-to-end pipeline integration test")
@@ -37,8 +38,13 @@ def test_end_to_end_pipeline_with_limit(test_logger, environment, function_type,
         test_logger.info("ℹ️ End-to-end test only applicable to ingest function")
         pytest.skip("End-to-end pipeline test only runs for ingest function")
     
-    # Use limit from pytest fixture (thread-safe)
-    test_logger.info(f"🎯 Testing with limit from fixture: {limit}")
+    # Log limit parameter interpretation
+    if limit == 0:
+        test_logger.info(f"🎯 Testing with UNLIMITED fetch (limit=0)")
+        test_logger.info(f"✅ Will fetch all available records")
+    else:
+        test_logger.info(f"🎯 Testing with limit from fixture: {limit}")
+    
     test_logger.info(f"✅ Thread-safe parameter passing - no environment variables used")
     
     try:
@@ -63,7 +69,10 @@ def test_end_to_end_pipeline_with_limit(test_logger, environment, function_type,
         }
         
         test_logger.info(f"🚀 Executing pipeline with event: {event_data}")
-        test_logger.info(f"🎯 Limit parameter (thread-safe): limit={limit}")
+        if limit == 0:
+            test_logger.info(f"🎯 Unlimited mode: limit=0 means fetch all records")
+        else:
+            test_logger.info(f"🎯 Limited mode: limit={limit}")
         
         # Execute the pipeline
         start_time = datetime.utcnow()
@@ -128,26 +137,48 @@ def test_end_to_end_pipeline_with_limit(test_logger, environment, function_type,
             test_logger.warning("⚠️ Pipeline completed but no records were processed")
             # Don't fail the test - this might be expected if no new data
         
-        # Check limit compliance (should FAIL test if exceeded)
-        if total_records > limit:
+        # FIXED: Check limit compliance with proper unlimited handling
+        if limit == 0:
+            # Unlimited mode - any number of records is valid
+            test_logger.info(f"✅ Unlimited fetch completed: {total_records} records")
+            test_logger.info(f"🎯 Perfect unlimited operation: limit=0 means no restrictions")
+            
+            # Log helpful metrics for unlimited fetch
+            if total_records > 1000:
+                test_logger.info(f"📈 Large dataset: {total_records:,} records processed successfully")
+            elif total_records > 100:
+                test_logger.info(f"📊 Medium dataset: {total_records} records processed")
+            else:
+                test_logger.info(f"📋 Small dataset: {total_records} records processed")
+                
+        elif total_records > limit:
+            # Limited mode - check if limit was exceeded
             test_logger.error(f"❌ Limit violation: {total_records} records > {limit} limit")
             test_logger.error("💡 Pipeline is not respecting the limit parameter")
             test_logger.error("🔧 Check the fetcher.py limit enforcement logic")
             pytest.fail(f"Limit exceeded: got {total_records} records but limit was {limit}")
         else:
+            # Limited mode - limit respected
             test_logger.info(f"✅ Limit respected: {total_records} <= {limit}")
-            test_logger.info(f"🎯 Perfect compliance: {((limit - total_records) / limit * 100):.1f}% under limit")
+            if limit > 0:
+                compliance_pct = ((limit - total_records) / limit * 100)
+                test_logger.info(f"🎯 Compliance: {compliance_pct:.1f}% under limit")
         
         # Verify data was written to BigQuery (with better error handling)
         test_logger.info("🗄️ Verifying data was written to BigQuery")
         verify_bigquery_data_written(test_logger, snapshot_id, environment)
                 
-        # Success - log final summary
+        # Success - log final summary with proper limit interpretation
         test_logger.info("✅ End-to-end pipeline test completed successfully")
-        test_logger.info(f"📈 Summary: {total_records} records processed in {execution_time:.2f}s")
+        test_logger.info(f"📈 Summary: {total_records:,} records processed in {execution_time:.2f}s")
         test_logger.info(f"💾 Data persisted in {environment} environment tables")
         test_logger.info(f"🔍 Snapshot ID for inspection: {snapshot_id}")
-        test_logger.info(f"🎯 Limit parameter worked: {limit} (thread-safe)")
+        
+        # Log limit interpretation
+        if limit == 0:
+            test_logger.info(f"🎯 Unlimited fetch successful: no limit applied")
+        else:
+            test_logger.info(f"🎯 Limited fetch successful: {limit} limit (thread-safe)")
         
         # Log test metadata (don't return from pytest test function)
         test_metadata = {
@@ -157,10 +188,18 @@ def test_end_to_end_pipeline_with_limit(test_logger, environment, function_type,
             'results_breakdown': results_breakdown,
             'environment': environment,
             'limit': limit,
+            'unlimited_mode': limit == 0,
             'thread_safe_params': True
         }
         
         test_logger.info(f"🎯 Test completed successfully with metadata: {test_metadata}")
+        
+        # Additional success metrics for unlimited fetches
+        if limit == 0 and total_records > 0:
+            test_logger.info("🏆 FULL SNAPSHOT SUCCESS:")
+            test_logger.info(f"  📊 Complete dataset: {total_records:,} records")
+            test_logger.info(f"  ⚡ Performance: {total_records/execution_time:.1f} records/second")
+            test_logger.info(f"  📸 Snapshot ready for state restoration")
         
         # pytest test functions should not return values
         return None
@@ -179,7 +218,6 @@ def test_end_to_end_pipeline_with_limit(test_logger, environment, function_type,
         import traceback
         test_logger.error(f"❌ Full traceback: {traceback.format_exc()}")
         pytest.fail(f"End-to-end pipeline error: {e}")
-
 def verify_bigquery_data_written(test_logger, snapshot_id: str, environment: str):
     """Verify that data was actually written to BigQuery tables (FIXED VERSION)"""
     try:
