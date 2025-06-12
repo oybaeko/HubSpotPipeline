@@ -55,3 +55,7 @@ test-results/dev_integration_small_20250610_215523_curl.txt
 test-results/dev_integration_small_20250610_215523.json
 test-results/dev_integration_small_20250611_071339_curl.txt
 test-results/dev_integration_small_20250611_071339.json
+test-results/dev_integration_full_20250611_193902_curl.txt
+test-results/dev_integration_full_20250611_193902.json
+test-results/dev_integration_full_20250611_202758_curl.txt
+test-results/dev_integration_full_20250611_202758.json
