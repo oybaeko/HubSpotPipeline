@@ -172,6 +172,6 @@ def _detect_environment() -> str:
         return 'development'
 
 def _get_timestamp() -> str:
-    """Get current timestamp in ISO format"""
+    """Get current timestamp in ISO format with microseconds"""
     from datetime import datetime
-    return datetime.utcnow().isoformat() + 'Z'
+    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")

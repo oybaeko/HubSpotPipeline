@@ -85,6 +85,11 @@ def fetch_object(object_type, config, snapshot_id, limit=100):
             # Calculate page size: min of (remaining records needed, HubSpot max 100)
             records_so_far = len(out)
             
+            # Early exit check - if we already have enough records, stop
+            if not unlimited and records_so_far >= effective_limit:
+                logger.info(f"✅ Already have {records_so_far} records, meeting limit of {effective_limit}")
+                break
+            
             if unlimited:
                 # No limit - use HubSpot's max page size
                 page_limit = 100
@@ -117,10 +122,11 @@ def fetch_object(object_type, config, snapshot_id, limit=100):
                 logger.debug(f"API call {api_calls} completed - Rate: {page_size/page_time:.1f} records/second")
             
             # Process each object in the page
+            records_processed_this_page = 0
             for i, obj in enumerate(page.results):
                 # Check if we've hit our limit before processing this record
                 if not unlimited and len(out) >= effective_limit:
-                    logger.info(f"✅ Reached exact limit of {effective_limit} records (stopping mid-page)")
+                    logger.info(f"✅ Reached exact limit of {effective_limit} records (stopping mid-page at record {i+1}/{page_size})")
                     break
                 
                 try:
@@ -158,6 +164,7 @@ def fetch_object(object_type, config, snapshot_id, limit=100):
                                 row[assoc_cfg["field_name"]] = None
                     
                     out.append(row)
+                    records_processed_this_page += 1
                     
                 except Exception as e:
                     logger.warning(f"Error processing record {obj.id}: {e}")
@@ -168,9 +175,9 @@ def fetch_object(object_type, config, snapshot_id, limit=100):
             # Check if we should continue to next page
             records_so_far = len(out)
             
-            # Stop if we've hit our limit
+            # Stop if we've hit our limit (this catches mid-page stops)
             if not unlimited and records_so_far >= effective_limit:
-                logger.info(f"✅ Reached limit of {effective_limit} records")
+                logger.info(f"✅ Reached limit of {effective_limit} records after processing {records_processed_this_page} records from page {page_count}")
                 break
                 
             # Stop if no more pages available
@@ -190,14 +197,15 @@ def fetch_object(object_type, config, snapshot_id, limit=100):
                 logger.debug(f"API call details - after: {after}, page_limit: {page_limit}")
             raise RuntimeError(f"Failed to fetch {object_type} data: {e}")
     
-    # Final truncation to ensure exact limit compliance
-    if not unlimited and len(out) > effective_limit:
-        logger.warning(f"⚠️ Truncating {len(out)} records to exact limit of {effective_limit}")
+    # Final validation - ensure we never exceed the limit
+    final_count = len(out)
+    if not unlimited and final_count > effective_limit:
+        logger.warning(f"⚠️ Safety truncation: {final_count} records > {effective_limit} limit, truncating")
         out = out[:effective_limit]
+        final_count = len(out)
     
     # Final summary
     total_time = (datetime.utcnow() - start_time).total_seconds()
-    final_count = len(out)
     
     logger.info(f"✅ Fetch completed for {object_type}")
     logger.info(f"📊 Total records: {final_count}")

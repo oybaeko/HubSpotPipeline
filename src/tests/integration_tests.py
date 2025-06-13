@@ -23,6 +23,249 @@ def test_end_to_end_pipeline_with_limit(test_logger, environment, function_type,
     - Only runs in dev/staging environments (skips prod)
     - Uses actual production tables (no cleanup)
     - Configurable record limit for different test scenarios
+    - FIXED: Properly validates limit per object type, not total
+    - Returns detailed results for inspection
+    """
+    test_logger.info("🔄 Starting end-to-end pipeline integration test")
+    
+    # Environment safety check - only run in dev/staging
+    if environment == 'production':
+        test_logger.info("⚠️ Skipping end-to-end test in production environment")
+        pytest.skip("End-to-end integration tests not run in production for safety")
+    
+    # Function type check - only meaningful for ingest function
+    if function_type != 'ingest':
+        test_logger.info("ℹ️ End-to-end test only applicable to ingest function")
+        pytest.skip("End-to-end pipeline test only runs for ingest function")
+    
+    # Log limit parameter interpretation
+    if limit == 0:
+        test_logger.info(f"🎯 Testing with UNLIMITED fetch (limit=0)")
+        test_logger.info(f"✅ Will fetch all available records per object type")
+    else:
+        test_logger.info(f"🎯 Testing with limit from fixture: {limit} per object type")
+    
+    test_logger.info(f"✅ Thread-safe parameter passing - no environment variables used")
+    
+    try:
+        # Initialize the pipeline environment
+        test_logger.info("🔧 Initializing pipeline environment")
+        from hubspot_pipeline.hubspot_ingest.config_loader import init_env
+        init_env()
+        test_logger.info("✅ Pipeline environment initialized successfully")
+        
+        # Import and run the main ingest pipeline
+        test_logger.info("📥 Importing HubSpot ingest pipeline")
+        from hubspot_pipeline.hubspot_ingest.main import main as ingest_main
+        test_logger.info("✅ Pipeline import successful")
+        
+        # Prepare event data for the pipeline
+        event_data = {
+            'limit': limit,  # Pass as 'limit' parameter that pipeline expects
+            'dry_run': False,  # Real run - data will be written
+            'log_level': 'INFO',
+            'trigger_source': f'integration_test_{safe_test_id}',
+            'test_mode': True  # Mark as test for identification
+        }
+        
+        test_logger.info(f"🚀 Executing pipeline with event: {event_data}")
+        if limit == 0:
+            test_logger.info(f"🎯 Unlimited mode: limit=0 means fetch all records per object")
+        else:
+            test_logger.info(f"🎯 Limited mode: limit={limit} per object type")
+        
+        # Execute the pipeline
+        start_time = datetime.utcnow()
+        result = ingest_main(event=event_data)
+        end_time = datetime.utcnow()
+        
+        execution_time = (end_time - start_time).total_seconds()
+        test_logger.info(f"⏱️ Pipeline execution completed in {execution_time:.2f} seconds")
+        test_logger.info(f"📋 Pipeline result type: {type(result)}")
+        test_logger.info(f"📋 Pipeline result: {result}")
+        
+        # Validate pipeline result - handle both dict and tuple formats
+        if isinstance(result, tuple) and len(result) == 2:
+            # Handle HTTP response format (response_data, status_code)
+            result_data, status_code = result
+            test_logger.info(f"📋 Received tuple result: status_code={status_code}, data_type={type(result_data)}")
+            
+            if status_code != 200:
+                test_logger.error(f"❌ Pipeline failed with HTTP status {status_code}")
+                test_logger.error(f"❌ Error response: {result_data}")
+                pytest.fail(f"Pipeline failed with status {status_code}: {result_data}")
+            
+            # Use the response data as the result
+            result = result_data
+            test_logger.info("✅ Using response data from tuple result")
+            
+        elif not isinstance(result, dict):
+            test_logger.error(f"❌ Pipeline returned unexpected format: {type(result)}")
+            test_logger.error(f"❌ Result content: {result}")
+            pytest.fail(f"Pipeline returned unexpected format: {type(result)} - {result}")
+        
+        # Now result should be a dict
+        if not result:
+            test_logger.error("❌ Pipeline returned empty result")
+            pytest.fail("Pipeline returned empty result")
+        
+        test_logger.info(f"📊 Pipeline result keys: {list(result.keys())}")
+        
+        if result.get('status') != 'success':
+            error_msg = result.get('error', 'Unknown error')
+            test_logger.error(f"❌ Pipeline execution failed: {error_msg}")
+            pytest.fail(f"Pipeline execution failed: {error_msg}")
+        
+        # Extract key metrics from result
+        snapshot_id = result.get('snapshot_id')
+        total_records = result.get('total_records', 0)
+        results_breakdown = result.get('results', {})
+        
+        test_logger.info(f"📊 Pipeline Results:")
+        test_logger.info(f"  Snapshot ID: {snapshot_id}")
+        test_logger.info(f"  Total Records: {total_records}")
+        test_logger.info(f"  Execution Time: {execution_time:.2f}s")
+        
+        # Log data breakdown
+        if results_breakdown:
+            test_logger.info("📋 Data Breakdown by Object Type:")
+            for table, count in results_breakdown.items():
+                test_logger.info(f"  {table}: {count} records")
+        
+        # Validate minimum expectations
+        if total_records == 0:
+            test_logger.warning("⚠️ Pipeline completed but no records were processed")
+            # Don't fail the test - this might be expected if no new data
+        
+        # FIXED: Check limit compliance per object type, not total
+        if limit == 0:
+            # Unlimited mode - any number of records is valid
+            test_logger.info(f"✅ Unlimited fetch completed: {total_records} total records")
+            test_logger.info(f"🎯 Perfect unlimited operation: limit=0 means no restrictions per object")
+            
+            # Log helpful metrics for unlimited fetch
+            if total_records > 1000:
+                test_logger.info(f"📈 Large dataset: {total_records:,} records processed successfully")
+            elif total_records > 100:
+                test_logger.info(f"📊 Medium dataset: {total_records} records processed")
+            else:
+                test_logger.info(f"📋 Small dataset: {total_records} records processed")
+                
+        elif results_breakdown:
+            # Limited mode - check if limit was exceeded per object type
+            test_logger.info(f"🔍 Validating {limit} limit per object type...")
+            
+            limit_violations = []
+            compliant_objects = []
+            
+            for table, count in results_breakdown.items():
+                if count > limit:
+                    limit_violations.append(f"{table}: {count} > {limit}")
+                    test_logger.error(f"❌ {table}: {count} records > {limit} limit")
+                else:
+                    compliant_objects.append(f"{table}: {count}")
+                    test_logger.info(f"✅ {table}: {count} records <= {limit} limit")
+            
+            # Report results
+            if limit_violations:
+                test_logger.error(f"❌ Per-object limit violations found:")
+                for violation in limit_violations:
+                    test_logger.error(f"  • {violation}")
+                test_logger.error("💡 Each object type should respect the individual limit")
+                test_logger.error("🔧 Check the fetcher.py limit enforcement logic")
+                pytest.fail(f"Per-object limit violations: {limit_violations}")
+            else:
+                test_logger.info(f"✅ All object types respect {limit} limit individually")
+                test_logger.info(f"📊 Compliant objects: {len(compliant_objects)}")
+                for compliant in compliant_objects:
+                    test_logger.info(f"  • {compliant}")
+                test_logger.info(f"📊 Total across all objects: {total_records} (expected to be >= {limit})")
+                
+                # Calculate some useful metrics
+                if total_records > limit:
+                    multiplier = total_records / limit
+                    test_logger.info(f"🎯 Total is {multiplier:.1f}x the per-object limit (this is expected and correct)")
+                
+        else:
+            # No breakdown available
+            test_logger.warning("⚠️ No results breakdown available for per-object validation")
+            test_logger.info(f"📊 Total records: {total_records}")
+            if total_records > limit:
+                test_logger.info(f"💡 Total > limit is expected when fetching multiple object types")
+        
+        # Verify data was written to BigQuery (with better error handling)
+        test_logger.info("🗄️ Verifying data was written to BigQuery")
+        verify_bigquery_data_written(test_logger, snapshot_id, environment)
+                
+        # Success - log final summary with proper limit interpretation
+        test_logger.info("✅ End-to-end pipeline test completed successfully")
+        test_logger.info(f"📈 Summary: {total_records:,} records processed in {execution_time:.2f}s")
+        test_logger.info(f"💾 Data persisted in {environment} environment tables")
+        test_logger.info(f"🔍 Snapshot ID for inspection: {snapshot_id}")
+        
+        # Log limit interpretation
+        if limit == 0:
+            test_logger.info(f"🎯 Unlimited fetch successful: no limit applied per object")
+        else:
+            test_logger.info(f"🎯 Limited fetch successful: {limit} limit per object type (thread-safe)")
+            if results_breakdown:
+                object_count = len([obj for obj, count in results_breakdown.items() if count > 0])
+                test_logger.info(f"🎯 Fetched from {object_count} object types, total may exceed per-object limit")
+        
+        # Log test metadata (don't return from pytest test function)
+        test_metadata = {
+            'snapshot_id': snapshot_id,
+            'total_records': total_records,
+            'execution_time': execution_time,
+            'results_breakdown': results_breakdown,
+            'environment': environment,
+            'limit': limit,
+            'unlimited_mode': limit == 0,
+            'thread_safe_params': True,
+            'per_object_limit_validation': True
+        }
+        
+        test_logger.info(f"🎯 Test completed successfully with metadata: {test_metadata}")
+        
+        # Additional success metrics for unlimited fetches
+        if limit == 0 and total_records > 0:
+            test_logger.info("🏆 FULL SNAPSHOT SUCCESS:")
+            test_logger.info(f"  📊 Complete dataset: {total_records:,} records")
+            test_logger.info(f"  ⚡ Performance: {total_records/execution_time:.1f} records/second")
+            test_logger.info(f"  📸 Snapshot ready for state restoration")
+        
+        # Additional success metrics for limited fetches
+        if limit > 0 and results_breakdown:
+            test_logger.info("🏆 LIMITED FETCH SUCCESS:")
+            for obj, count in results_breakdown.items():
+                if count > 0:
+                    compliance_pct = min(100, (count / limit) * 100)
+                    test_logger.info(f"  📊 {obj}: {count} records ({compliance_pct:.1f}% of limit)")
+        
+        # pytest test functions should not return values
+        return None
+        
+    except ImportError as e:
+        test_logger.error(f"❌ Failed to import pipeline modules: {e}")
+        test_logger.error(f"❌ Import error details: {type(e).__name__}: {str(e)}")
+        import traceback
+        test_logger.error(f"❌ Full traceback: {traceback.format_exc()}")
+        pytest.fail(f"Pipeline import error: {e}")
+        
+    except Exception as e:
+        test_logger.error(f"❌ End-to-end pipeline test failed: {e}")
+        test_logger.error(f"❌ Exception type: {type(e).__name__}")
+        test_logger.error(f"❌ Exception details: {str(e)}")
+        import traceback
+        test_logger.error(f"❌ Full traceback: {traceback.format_exc()}")
+        pytest.fail(f"End-to-end pipeline error: {e}")
+    """
+    End-to-end pipeline test with configurable record limit
+    
+    Tests the complete HubSpot → BigQuery → Pub/Sub → Scoring pipeline
+    - Only runs in dev/staging environments (skips prod)
+    - Uses actual production tables (no cleanup)
+    - Configurable record limit for different test scenarios
     - FIXED: Properly handles limit=0 as unlimited
     - Returns detailed results for inspection
     """

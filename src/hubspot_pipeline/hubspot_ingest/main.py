@@ -82,7 +82,7 @@ def main(event=None, context=None):
     # Load schema and create snapshot ID
     try:
         schema = load_schema()
-        snapshot_id = datetime.utcnow().isoformat(timespec="seconds")
+        snapshot_id = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         logger.info(f"📸 Created snapshot ID: {snapshot_id}")
         logger.debug(f"Schema contains {len(schema)} object types: {list(schema.keys())}")
     except Exception as e:
