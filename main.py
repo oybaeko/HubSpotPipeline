@@ -209,9 +209,10 @@ def run_scoring_test(snapshot_id, env_info):
         
         print(f"🎯 Processing snapshot: {snapshot_id}")
         
-        # Create a mock Pub/Sub event for the scoring function
+        # Create a mock CloudEvent for the 2nd gen scoring function
         import json
         import base64
+        from types import SimpleNamespace
         
         mock_event_data = {
             "type": "hubspot.snapshot.completed",
@@ -222,14 +223,18 @@ def run_scoring_test(snapshot_id, env_info):
             }
         }
         
-        mock_pubsub_event = {
-            'data': base64.b64encode(json.dumps(mock_event_data).encode('utf-8'))
+        # Create mock CloudEvent object (2nd gen format)
+        mock_cloud_event = SimpleNamespace()
+        mock_cloud_event.data = {
+            'message': {
+                'data': base64.b64encode(json.dumps(mock_event_data).encode('utf-8'))
+            }
         }
         
-        print("📤 Simulating Pub/Sub event for scoring function...")
+        print("📤 Simulating CloudEvent for scoring function...")
         
-        # Call the scoring Cloud Function
-        result = scoring_cloud_main(mock_pubsub_event, None)
+        # Call the scoring Cloud Function (2nd gen - only takes 1 argument)
+        result = scoring_cloud_main(mock_cloud_event)
         
         print("-" * 50)
         if result.get('status') == 'success':
@@ -343,7 +348,7 @@ def clean_data_tables(table_type, env_info):
         return False
 
 def get_latest_snapshot_id():
-    """Get the latest snapshot ID from the registry"""
+    """Get the latest snapshot ID from the registry using consistent field names"""
     try:
         from google.cloud import bigquery
         import os
@@ -356,7 +361,7 @@ def get_latest_snapshot_id():
         SELECT snapshot_id
         FROM `{project_id}.{dataset_id}.hs_snapshot_registry`
         WHERE status LIKE '%ingest%'
-        ORDER BY snapshot_timestamp DESC
+        ORDER BY record_timestamp DESC
         LIMIT 1
         """
         
@@ -384,12 +389,12 @@ def view_recent_snapshots(env_info):
         query = f"""
         SELECT 
             snapshot_id,
-            snapshot_timestamp,
+            record_timestamp,
             triggered_by,
             status,
             notes
         FROM `{project}.{dataset}.hs_snapshot_registry`
-        ORDER BY snapshot_timestamp DESC
+        ORDER BY record_timestamp DESC
         LIMIT 10
         """
         
@@ -397,7 +402,7 @@ def view_recent_snapshots(env_info):
         
         for i, row in enumerate(results, 1):
             print(f"\n{i}. 📸 {row.snapshot_id}")
-            print(f"   🕐 {row.snapshot_timestamp}")
+            print(f"   🕐 {row.record_timestamp}")
             print(f"   🎯 Triggered by: {row.triggered_by}")
             print(f"   📊 Status: {row.status}")
             print(f"   📝 Notes: {row.notes}")

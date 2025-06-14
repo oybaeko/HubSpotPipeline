@@ -7,7 +7,7 @@ from typing import Dict, List, Tuple
 from google.cloud import bigquery
 from google.api_core.exceptions import NotFound
 
-from .reference.schemas import SNAPSHOT_REGISTRY_SCHEMA
+from .reference.schemas import SNAPSHOT_REGISTRY_SCHEMA, OWNERS_SCHEMA, DEAL_STAGES_SCHEMA
 
 def get_required_tables_with_schemas(schema_config: Dict) -> Dict[str, List[Tuple[str, str]]]:
     """
@@ -24,7 +24,7 @@ def get_required_tables_with_schemas(schema_config: Dict) -> Dict[str, List[Tupl
     # Add data tables from schema config
     for object_type, config_obj in schema_config.items():
         table_name = config_obj["object_name"]
-        # We'll need to import the actual schemas - for now use basic schema
+        # Import the actual schemas from the main schema module
         if table_name == "hs_companies":
             from ..schema import SCHEMA_COMPANIES
             required_tables[table_name] = SCHEMA_COMPANIES
@@ -32,26 +32,9 @@ def get_required_tables_with_schemas(schema_config: Dict) -> Dict[str, List[Tupl
             from ..schema import SCHEMA_DEALS
             required_tables[table_name] = SCHEMA_DEALS
     
-    # Add reference tables
-    required_tables["hs_owners"] = [
-        ("owner_id", "STRING"),
-        ("email", "STRING"),
-        ("first_name", "STRING"),
-        ("last_name", "STRING"),
-        ("user_id", "STRING"),
-        ("active", "BOOLEAN"),
-        ("timestamp", "TIMESTAMP"),
-    ]
-    
-    required_tables["hs_deal_stage_reference"] = [
-        ("pipeline_id", "STRING"),
-        ("pipeline_label", "STRING"),
-        ("stage_id", "STRING"),
-        ("stage_label", "STRING"),
-        ("is_closed", "BOOLEAN"),
-        ("probability", "FLOAT"),
-        ("display_order", "INTEGER"),
-    ]
+    # Add reference tables using the CORRECT schemas from reference/schemas.py
+    required_tables["hs_owners"] = OWNERS_SCHEMA
+    required_tables["hs_deal_stage_reference"] = DEAL_STAGES_SCHEMA
     
     # Add registry table
     required_tables["hs_snapshot_registry"] = SNAPSHOT_REGISTRY_SCHEMA
@@ -141,12 +124,17 @@ def ensure_all_tables_ready(schema_config: Dict) -> bool:
     # Create BigQuery client with explicit project
     client = bigquery.Client(project=project_id)
     
-    # Get all required tables
+    # Get all required tables with CORRECT schemas
     required_tables = get_required_tables_with_schemas(schema_config)
     
     logger.info(f"📋 Checking {len(required_tables)} required tables:")
     for table_name in required_tables.keys():
         logger.info(f"   • {table_name}")
+    
+    # Debug: Log the schemas being used
+    if logger.isEnabledFor(logging.DEBUG):
+        for table_name, table_schema in required_tables.items():
+            logger.debug(f"Schema for {table_name}: {[col for col, _ in table_schema]}")
     
     # Check each table
     all_ready = True

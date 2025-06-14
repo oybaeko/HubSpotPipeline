@@ -3,9 +3,10 @@
 import logging
 import os
 from typing import List, Tuple
+from datetime import datetime
 from google.cloud import bigquery
 
-# Stage mapping schema
+# Stage mapping schema with record_timestamp
 STAGE_MAPPING_SCHEMA: List[Tuple[str, str]] = [
     ("lifecycle_stage", "STRING"),
     ("lead_status",     "STRING"),
@@ -13,37 +14,40 @@ STAGE_MAPPING_SCHEMA: List[Tuple[str, str]] = [
     ("combined_stage",  "STRING"),
     ("stage_level",     "INTEGER"),
     ("adjusted_score",  "FLOAT"),
+    ("record_timestamp", "TIMESTAMP"),
 ]
 
 def get_stage_mapping_data():
-    """Get the hardcoded stage mapping configuration"""
+    """Get the hardcoded stage mapping configuration with consistent timestamps"""
+    current_timestamp = datetime.utcnow().isoformat() + "Z"
+    
     return [
         # Lead lifecycle stages
-        {"lifecycle_stage": "lead", "lead_status": "new", "deal_stage": None, "combined_stage": "lead/new", "stage_level": 1, "adjusted_score": 1.0},
-        {"lifecycle_stage": "lead", "lead_status": "restart", "deal_stage": None, "combined_stage": "lead/restart", "stage_level": 1, "adjusted_score": 1.0},
-        {"lifecycle_stage": "lead", "lead_status": "attempted to contact", "deal_stage": None, "combined_stage": "lead/attempted_to_contact", "stage_level": 2, "adjusted_score": 1.5},
-        {"lifecycle_stage": "lead", "lead_status": "connected", "deal_stage": None, "combined_stage": "lead/connected", "stage_level": 3, "adjusted_score": 2.0},
-        {"lifecycle_stage": "lead", "lead_status": "nurturing", "deal_stage": None, "combined_stage": "lead/nurturing", "stage_level": 0, "adjusted_score": 2.0},
+        {"lifecycle_stage": "lead", "lead_status": "new", "deal_stage": None, "combined_stage": "lead/new", "stage_level": 1, "adjusted_score": 1.0, "record_timestamp": current_timestamp},
+        {"lifecycle_stage": "lead", "lead_status": "restart", "deal_stage": None, "combined_stage": "lead/restart", "stage_level": 1, "adjusted_score": 1.0, "record_timestamp": current_timestamp},
+        {"lifecycle_stage": "lead", "lead_status": "attempted to contact", "deal_stage": None, "combined_stage": "lead/attempted_to_contact", "stage_level": 2, "adjusted_score": 1.5, "record_timestamp": current_timestamp},
+        {"lifecycle_stage": "lead", "lead_status": "connected", "deal_stage": None, "combined_stage": "lead/connected", "stage_level": 3, "adjusted_score": 2.0, "record_timestamp": current_timestamp},
+        {"lifecycle_stage": "lead", "lead_status": "nurturing", "deal_stage": None, "combined_stage": "lead/nurturing", "stage_level": 0, "adjusted_score": 2.0, "record_timestamp": current_timestamp},
 
         # Sales Qualified Lead (no lead_status or deal_stage)
-        {"lifecycle_stage": "sales qualified lead", "lead_status": None, "deal_stage": None, "combined_stage": "salesqualifiedlead", "stage_level": 4, "adjusted_score": 6.0},
+        {"lifecycle_stage": "sales qualified lead", "lead_status": None, "deal_stage": None, "combined_stage": "salesqualifiedlead", "stage_level": 4, "adjusted_score": 6.0, "record_timestamp": current_timestamp},
 
         # Opportunity (deal-driven)
-        {"lifecycle_stage": "opportunity", "lead_status": None, "deal_stage": None, "combined_stage": "opportunity/missing", "stage_level": 5, "adjusted_score": 7.0},
-        {"lifecycle_stage": "opportunity", "lead_status": None, "deal_stage": "appointmentscheduled", "combined_stage": "opportunity/appointmentscheduled", "stage_level": 5, "adjusted_score": 8.0},
-        {"lifecycle_stage": "opportunity", "lead_status": None, "deal_stage": "qualifiedtobuy", "combined_stage": "opportunity/qualifiedtobuy", "stage_level": 6, "adjusted_score": 10.0},
-        {"lifecycle_stage": "opportunity", "lead_status": None, "deal_stage": "presentationscheduled", "combined_stage": "opportunity/presentationscheduled", "stage_level": 7, "adjusted_score": 12.0},
-        {"lifecycle_stage": "opportunity", "lead_status": None, "deal_stage": "decisionmakerboughtin", "combined_stage": "opportunity/decisionmakerboughtin", "stage_level": 8, "adjusted_score": 14.0},
+        {"lifecycle_stage": "opportunity", "lead_status": None, "deal_stage": None, "combined_stage": "opportunity/missing", "stage_level": 5, "adjusted_score": 7.0, "record_timestamp": current_timestamp},
+        {"lifecycle_stage": "opportunity", "lead_status": None, "deal_stage": "appointmentscheduled", "combined_stage": "opportunity/appointmentscheduled", "stage_level": 5, "adjusted_score": 8.0, "record_timestamp": current_timestamp},
+        {"lifecycle_stage": "opportunity", "lead_status": None, "deal_stage": "qualifiedtobuy", "combined_stage": "opportunity/qualifiedtobuy", "stage_level": 6, "adjusted_score": 10.0, "record_timestamp": current_timestamp},
+        {"lifecycle_stage": "opportunity", "lead_status": None, "deal_stage": "presentationscheduled", "combined_stage": "opportunity/presentationscheduled", "stage_level": 7, "adjusted_score": 12.0, "record_timestamp": current_timestamp},
+        {"lifecycle_stage": "opportunity", "lead_status": None, "deal_stage": "decisionmakerboughtin", "combined_stage": "opportunity/decisionmakerboughtin", "stage_level": 8, "adjusted_score": 14.0, "record_timestamp": current_timestamp},
 
         # Closed-Won
-        {"lifecycle_stage": "closed-won", "lead_status": None, "deal_stage": "contractsent", "combined_stage": "closed-won/contractsent", "stage_level": 9, "adjusted_score": 30.0},
+        {"lifecycle_stage": "closed-won", "lead_status": None, "deal_stage": "contractsent", "combined_stage": "closed-won/contractsent", "stage_level": 9, "adjusted_score": 30.0, "record_timestamp": current_timestamp},
 
         # Disqualified
-        {"lifecycle_stage": "disqualified", "lead_status": None, "deal_stage": None, "combined_stage": "disqualified", "stage_level": -1, "adjusted_score": 0.0}
+        {"lifecycle_stage": "disqualified", "lead_status": None, "deal_stage": None, "combined_stage": "disqualified", "stage_level": -1, "adjusted_score": 0.0, "record_timestamp": current_timestamp}
     ]
 
 def ensure_stage_mapping_table_exists():
-    """Ensure the stage mapping table exists with correct schema"""
+    """Ensure the stage mapping table exists with correct schema including record_timestamp"""
     logger = logging.getLogger('hubspot.scoring.stage_mapping')
     
     client = bigquery.Client()
@@ -73,7 +77,7 @@ def ensure_stage_mapping_table_exists():
 
 def populate_stage_mapping():
     """
-    Populate the hs_stage_mapping table with scoring configuration
+    Populate the hs_stage_mapping table with scoring configuration including record_timestamp
     
     Returns:
         int: Number of stage mapping records loaded
@@ -87,10 +91,10 @@ def populate_stage_mapping():
         dataset_id = os.getenv('BIGQUERY_DATASET_ID')
         table_ref = f"{project_id}.{dataset_id}.hs_stage_mapping"
 
-        # Ensure table exists
+        # Ensure table exists with correct schema
         ensure_stage_mapping_table_exists()
 
-        # Get stage mapping data
+        # Get stage mapping data with timestamps
         stage_mapping = get_stage_mapping_data()
 
         # Recreate table (truncate and reload)

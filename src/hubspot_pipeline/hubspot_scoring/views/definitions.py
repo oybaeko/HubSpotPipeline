@@ -12,13 +12,13 @@ VIEW_CURRENT_PIPELINE_BY_OWNER = {
     "description": "Current pipeline scoring by sales rep from latest snapshot",
     "sql": """
 WITH latest_snapshot AS (
-  SELECT MAX(snapshot_id) as snapshot_id, MAX(snapshot_timestamp) as snapshot_timestamp
+  SELECT MAX(snapshot_id) as snapshot_id, MAX(record_timestamp) as record_timestamp
   FROM `{project}.{dataset}.hs_pipeline_units_snapshot`
 ),
 current_pipeline AS (
   SELECT 
     pus.snapshot_id,
-    pus.snapshot_timestamp,
+    pus.record_timestamp,
     pus.owner_id,
     o.email as owner_email,
     CONCAT(COALESCE(o.first_name, ''), ' ', COALESCE(o.last_name, '')) as owner_name,
@@ -41,7 +41,7 @@ current_pipeline AS (
 aggregated_pipeline AS (
   SELECT 
     snapshot_id,
-    snapshot_timestamp,
+    record_timestamp,
     owner_id,
     owner_email,
     owner_name,
@@ -75,15 +75,15 @@ VIEW_PIPELINE_COMPARISON = {
     "description": "Pipeline score comparison between current and previous week snapshots",
     "sql": """
 WITH latest_snapshot AS (
-  SELECT MAX(snapshot_id) as snapshot_id, MAX(snapshot_timestamp) as snapshot_timestamp
+  SELECT MAX(snapshot_id) as snapshot_id, MAX(record_timestamp) as record_timestamp
   FROM `{project}.{dataset}.hs_pipeline_units_snapshot`
 ),
 target_previous_date AS (
   SELECT 
     ls.snapshot_id as current_snapshot_id,
-    ls.snapshot_timestamp as current_snapshot_timestamp,
+    ls.record_timestamp as current_record_timestamp,
     -- Target date: Sunday one week ago
-    DATE_SUB(DATE(ls.snapshot_timestamp), INTERVAL 7 DAY) as target_previous_date
+    DATE_SUB(DATE(ls.record_timestamp), INTERVAL 7 DAY) as target_previous_date
   FROM latest_snapshot ls
 ),
 previous_snapshot AS (
@@ -92,14 +92,14 @@ previous_snapshot AS (
     -- Find snapshot closest to Sunday one week ago
     (SELECT snapshot_id 
      FROM `{project}.{dataset}.hs_pipeline_units_snapshot` 
-     WHERE DATE(snapshot_timestamp) <= tpd.target_previous_date
-     ORDER BY snapshot_timestamp DESC 
+     WHERE DATE(record_timestamp) <= tpd.target_previous_date
+     ORDER BY record_timestamp DESC 
      LIMIT 1) as previous_snapshot_id,
-    (SELECT snapshot_timestamp
+    (SELECT record_timestamp
      FROM `{project}.{dataset}.hs_pipeline_units_snapshot` 
-     WHERE DATE(snapshot_timestamp) <= tpd.target_previous_date
-     ORDER BY snapshot_timestamp DESC 
-     LIMIT 1) as previous_snapshot_timestamp
+     WHERE DATE(record_timestamp) <= tpd.target_previous_date
+     ORDER BY record_timestamp DESC 
+     LIMIT 1) as previous_record_timestamp
   FROM target_previous_date tpd
 ),
 current_scores AS (
@@ -128,9 +128,9 @@ SELECT
   cs.owner_email,
   cs.owner_name,
   ps.current_snapshot_id,
-  ps.current_snapshot_timestamp,
+  ps.current_record_timestamp,
   ps.previous_snapshot_id,
-  ps.previous_snapshot_timestamp,
+  ps.previous_record_timestamp,
   ps.target_previous_date,
   COALESCE(cs.current_total_score, 0) as current_total_score,
   COALESCE(cs.current_total_companies, 0) as current_total_companies,
@@ -157,14 +157,14 @@ VIEW_PIPELINE_CHANGES = {
     "description": "Companies that changed status between current and previous week snapshots",
     "sql": """
 WITH latest_snapshot AS (
-  SELECT MAX(snapshot_id) as snapshot_id, MAX(snapshot_timestamp) as snapshot_timestamp
+  SELECT MAX(snapshot_id) as snapshot_id, MAX(record_timestamp) as record_timestamp
   FROM `{project}.{dataset}.hs_pipeline_units_snapshot`
 ),
 target_previous_date AS (
   SELECT 
     ls.snapshot_id as current_snapshot_id,
-    ls.snapshot_timestamp as current_snapshot_timestamp,
-    DATE_SUB(DATE(ls.snapshot_timestamp), INTERVAL 7 DAY) as target_previous_date
+    ls.record_timestamp as current_record_timestamp,
+    DATE_SUB(DATE(ls.record_timestamp), INTERVAL 7 DAY) as target_previous_date
   FROM latest_snapshot ls
 ),
 previous_snapshot AS (
@@ -172,22 +172,22 @@ previous_snapshot AS (
     tpd.*,
     (SELECT snapshot_id 
      FROM `{project}.{dataset}.hs_pipeline_units_snapshot` 
-     WHERE DATE(snapshot_timestamp) <= tpd.target_previous_date
-     ORDER BY snapshot_timestamp DESC 
+     WHERE DATE(record_timestamp) <= tpd.target_previous_date
+     ORDER BY record_timestamp DESC 
      LIMIT 1) as previous_snapshot_id,
-    (SELECT snapshot_timestamp
+    (SELECT record_timestamp
      FROM `{project}.{dataset}.hs_pipeline_units_snapshot` 
-     WHERE DATE(snapshot_timestamp) <= tpd.target_previous_date
-     ORDER BY snapshot_timestamp DESC 
-     LIMIT 1) as previous_snapshot_timestamp
+     WHERE DATE(record_timestamp) <= tpd.target_previous_date
+     ORDER BY record_timestamp DESC 
+     LIMIT 1) as previous_record_timestamp
   FROM target_previous_date tpd
 ),
 current_companies AS (
   SELECT 
     ps.current_snapshot_id,
-    ps.current_snapshot_timestamp,
+    ps.current_record_timestamp,
     ps.previous_snapshot_id,
-    ps.previous_snapshot_timestamp,
+    ps.previous_record_timestamp,
     pus.company_id,
     pus.owner_id,
     o.email as owner_email,
@@ -259,9 +259,9 @@ company_changes AS (
 SELECT * FROM (
   SELECT 
     current_snapshot_id,
-    current_snapshot_timestamp,
+    current_record_timestamp,
     previous_snapshot_id,
-    previous_snapshot_timestamp,
+    previous_record_timestamp,
     company_id,
     owner_id,
     owner_email,
@@ -296,9 +296,9 @@ SELECT * FROM (
   -- Handle deleted companies (lookup disqualified score from stage mapping)
   SELECT 
     cc.current_snapshot_id,
-    cc.current_snapshot_timestamp,
+    cc.current_record_timestamp,
     cc.previous_snapshot_id,
-    cc.previous_snapshot_timestamp,
+    cc.previous_record_timestamp,
     cc.company_id,
     cc.owner_id,
     cc.owner_email,
@@ -344,7 +344,7 @@ VIEW_PIPELINE_HISTORY_BY_SNAPSHOT = {
 WITH owner_snapshot_scores AS (
   SELECT 
     pus.snapshot_id,
-    pus.snapshot_timestamp,
+    pus.record_timestamp,
     pus.owner_id,
     o.email as owner_email,
     CONCAT(COALESCE(o.first_name, ''), ' ', COALESCE(o.last_name, '')) as owner_name,
@@ -371,7 +371,7 @@ WITH owner_snapshot_scores AS (
 snapshot_totals AS (
   SELECT 
     snapshot_id,
-    snapshot_timestamp,
+    record_timestamp,
     COUNT(DISTINCT owner_id) as active_owners,
     SUM(total_companies) as total_companies_all_owners,
     SUM(total_score) as total_score_all_owners,
@@ -388,15 +388,15 @@ SELECT
   -- Add ranking within each snapshot
   ROW_NUMBER() OVER (PARTITION BY oss.snapshot_id ORDER BY oss.total_score DESC) as owner_rank_in_snapshot,
   -- Add period-over-period calculation (previous snapshot for same owner)
-  LAG(oss.total_score) OVER (PARTITION BY oss.owner_id ORDER BY oss.snapshot_timestamp) as previous_total_score,
-  LAG(oss.total_companies) OVER (PARTITION BY oss.owner_id ORDER BY oss.snapshot_timestamp) as previous_total_companies,
-  LAG(oss.snapshot_timestamp) OVER (PARTITION BY oss.owner_id ORDER BY oss.snapshot_timestamp) as previous_snapshot_timestamp,
+  LAG(oss.total_score) OVER (PARTITION BY oss.owner_id ORDER BY oss.record_timestamp) as previous_total_score,
+  LAG(oss.total_companies) OVER (PARTITION BY oss.owner_id ORDER BY oss.record_timestamp) as previous_total_companies,
+  LAG(oss.record_timestamp) OVER (PARTITION BY oss.owner_id ORDER BY oss.record_timestamp) as previous_record_timestamp,
   -- Calculate change from previous snapshot
-  oss.total_score - LAG(oss.total_score) OVER (PARTITION BY oss.owner_id ORDER BY oss.snapshot_timestamp) as score_change_from_previous,
-  oss.total_companies - LAG(oss.total_companies) OVER (PARTITION BY oss.owner_id ORDER BY oss.snapshot_timestamp) as company_change_from_previous
+  oss.total_score - LAG(oss.total_score) OVER (PARTITION BY oss.owner_id ORDER BY oss.record_timestamp) as score_change_from_previous,
+  oss.total_companies - LAG(oss.total_companies) OVER (PARTITION BY oss.owner_id ORDER BY oss.record_timestamp) as company_change_from_previous
 FROM owner_snapshot_scores oss
 JOIN snapshot_totals st ON oss.snapshot_id = st.snapshot_id
-ORDER BY oss.snapshot_timestamp DESC, oss.total_score DESC, oss.owner_id
+ORDER BY oss.record_timestamp DESC, oss.total_score DESC, oss.owner_id
 """
 }
 

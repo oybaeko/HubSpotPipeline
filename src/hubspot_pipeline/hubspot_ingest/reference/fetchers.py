@@ -37,7 +37,7 @@ def fetch_owners() -> List[Dict[str, Any]]:
         
         logger.info(f"✅ Retrieved {len(raw_owners)} owners from HubSpot")
         
-        # Transform to BigQuery schema format
+        # Transform to BigQuery schema format with consistent record_timestamp
         owners_rows = []
         for owner in raw_owners:
             row = {
@@ -47,7 +47,7 @@ def fetch_owners() -> List[Dict[str, Any]]:
                 "last_name": owner.get("lastName"),
                 "user_id": str(owner.get("userId")) if owner.get("userId") else None,
                 "active": bool(owner.get("active", False)),
-                "timestamp": owner.get("updatedAt") or owner.get("createdAt"),
+                "record_timestamp": owner.get("updatedAt") or owner.get("createdAt"),
             }
             owners_rows.append(row)
         
@@ -103,7 +103,7 @@ def fetch_deal_stages() -> List[Dict[str, Any]]:
         logger.info(f"📊 Received {len(pipelines)} pipelines from API")
         logger.debug(f"📋 Pipeline IDs: {[p.get('id') for p in pipelines]}")
         
-        # Transform pipelines to stage records
+        # Transform pipelines to stage records (no timestamp field for reference data)
         stage_records = []
         for pipeline in pipelines:
             pipeline_id = str(pipeline.get("id"))
@@ -127,7 +127,8 @@ def fetch_deal_stages() -> List[Dict[str, Any]]:
                     "stage_label": stage.get("label"),
                     "is_closed": is_closed,
                     "probability": float(stage.get("metadata", {}).get("probability", 0)),
-                    "display_order": int(stage.get("displayOrder", 0))
+                    "display_order": int(stage.get("displayOrder", 0)),
+                    "record_timestamp": datetime.utcnow().isoformat() + "Z"
                 }
                 stage_records.append(record)
                 

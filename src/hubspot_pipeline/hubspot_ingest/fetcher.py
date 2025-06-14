@@ -130,10 +130,11 @@ def fetch_object(object_type, config, snapshot_id, limit=100):
                     break
                 
                 try:
-                    # Build the record
+                    # Build the record with consistent system fields
                     row = {
                         fields.get("id", config["id_field"]): obj.id,
-                        "snapshot_id": snapshot_id
+                        "snapshot_id": snapshot_id,
+                        "record_timestamp": datetime.utcnow().isoformat() + "Z"  # Add consistent timestamp
                     }
                     
                     # Add properties
@@ -251,7 +252,7 @@ def fetch_and_process_reference_data(snapshot_id):
         owners_response = owners_api.get_page(limit=100)
         
         if owners_response.results:
-            # Transform to BigQuery schema format
+            # Transform to BigQuery schema format with consistent record_timestamp
             owners_rows = []
             for owner in owners_response.results:
                 row = {
@@ -261,7 +262,7 @@ def fetch_and_process_reference_data(snapshot_id):
                     "last_name": owner.last_name,
                     "user_id": getattr(owner, 'user_id', None),
                     "active": getattr(owner, 'active', True),
-                    "timestamp": getattr(owner, 'updated_at', None) or getattr(owner, 'created_at', None),
+                    "record_timestamp": datetime.utcnow().isoformat() + "Z",
                 }
                 owners_rows.append(row)
             
@@ -301,7 +302,7 @@ def fetch_and_process_reference_data(snapshot_id):
         else:
             pipelines = response.json().get("results", [])
             
-            # Transform to stage records
+            # Transform to stage records with consistent record_timestamp
             records = []
             for pipeline in pipelines:
                 pipeline_id = pipeline.get("id")
@@ -314,7 +315,8 @@ def fetch_and_process_reference_data(snapshot_id):
                         "stage_label": stage.get("label"),
                         "is_closed": stage.get("metadata", {}).get("isClosed", False),
                         "probability": float(stage.get("metadata", {}).get("probability", 0)),
-                        "display_order": stage.get("displayOrder", 0)
+                        "display_order": stage.get("displayOrder", 0),
+                        "record_timestamp": datetime.utcnow().isoformat() + "Z"
                     })
             
             logger.info(f"📊 Fetched {len(records)} deal stages from {len(pipelines)} pipelines")

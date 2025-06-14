@@ -1,4 +1,4 @@
-# src/hubspot_pipeline/hubspot_ingest/registry.py - Updated with smart retry
+# src/hubspot_pipeline/hubspot_ingest/registry.py - Updated with consistent record_timestamp
 
 import logging
 import os
@@ -11,7 +11,6 @@ from google.api_core.exceptions import NotFound
 from hubspot_pipeline.bigquery_utils import (
     get_bigquery_client,
     get_table_reference,
-    insert_rows_with_smart_retry,  # Updated function name
     ensure_table_exists
 )
 from hubspot_pipeline.hubspot_ingest.reference.schemas import SNAPSHOT_REGISTRY_SCHEMA
@@ -43,7 +42,7 @@ def ensure_registry_table_exists() -> None:
 
 def register_snapshot_start(snapshot_id: str, triggered_by: str = "manual") -> bool:
     """
-    Register the start of a snapshot process with smart retry logic.
+    Register the start of a snapshot process using parameterized query for consistency.
     
     Args:
         snapshot_id: Unique identifier for this snapshot
@@ -60,21 +59,34 @@ def register_snapshot_start(snapshot_id: str, triggered_by: str = "manual") -> b
         client = get_bigquery_client()
         table_ref = get_table_reference("hs_snapshot_registry")
         
-        row = {
-            "snapshot_id": snapshot_id,
-            "snapshot_timestamp": datetime.utcnow().isoformat(),
-            "triggered_by": triggered_by,
-            "status": "started",
-            "notes": "Snapshot process initiated",
-        }
-        
-        # Use smart retry function that expects first failures as normal
-        insert_rows_with_smart_retry(
-            client=client,
-            table_ref=table_ref,
-            rows=[row],
-            operation_name=f"register snapshot start for {snapshot_id}"
+        # Use parameterized INSERT query with CURRENT_TIMESTAMP() for server-side consistency
+        query = f"""
+        INSERT INTO `{table_ref}` (
+            triggered_by,
+            status,
+            notes,
+            snapshot_id,
+            record_timestamp
+        ) VALUES (
+            @triggered_by,
+            @status,
+            @notes,
+            @snapshot_id,
+            CURRENT_TIMESTAMP()
         )
+        """
+        
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("triggered_by", "STRING", triggered_by),
+                bigquery.ScalarQueryParameter("status", "STRING", "started"),
+                bigquery.ScalarQueryParameter("notes", "STRING", "Snapshot process initiated"),
+                bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id),
+            ]
+        )
+        
+        job = client.query(query, job_config=job_config)
+        job.result()  # Wait for completion
         
         logger.info(f"✅ Registered snapshot start: {snapshot_id}")
         return True
@@ -87,7 +99,7 @@ def register_snapshot_start(snapshot_id: str, triggered_by: str = "manual") -> b
 def register_snapshot_ingest_complete(snapshot_id: str, data_counts: Dict[str, int], 
                                     reference_counts: Dict[str, int]) -> bool:
     """
-    Register the completion of snapshot ingest phase with smart retry logic.
+    Register the completion of snapshot ingest phase using parameterized query.
     Uses INSERT instead of UPDATE to avoid streaming buffer conflicts.
     
     Args:
@@ -109,23 +121,34 @@ def register_snapshot_ingest_complete(snapshot_id: str, data_counts: Dict[str, i
         total_reference = sum(reference_counts.values())
         notes = f"Ingest completed: {total_data} data records, {total_reference} reference records. Tables: {list(data_counts.keys())}"
         
-        # Instead of UPDATE, insert a new completion record with same snapshot_id
-        # This avoids streaming buffer conflicts while keeping clean snapshot_id
-        completion_row = {
-            "snapshot_id": snapshot_id,  # Same ID, different status
-            "snapshot_timestamp": datetime.utcnow().isoformat(),
-            "triggered_by": "ingest_completion",
-            "status": "ingest_completed",
-            "notes": notes,
-        }
-        
-        # Use smart retry function that expects first failures as normal
-        insert_rows_with_smart_retry(
-            client=client,
-            table_ref=table_ref,
-            rows=[completion_row],
-            operation_name=f"register ingest completion for {snapshot_id}"
+        # Insert new record for completion using parameterized query
+        query = f"""
+        INSERT INTO `{table_ref}` (
+            triggered_by,
+            status,
+            notes,
+            snapshot_id,
+            record_timestamp
+        ) VALUES (
+            @triggered_by,
+            @status,
+            @notes,
+            @snapshot_id,
+            CURRENT_TIMESTAMP()
         )
+        """
+        
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("triggered_by", "STRING", "ingest_completion"),
+                bigquery.ScalarQueryParameter("status", "STRING", "ingest_completed"),
+                bigquery.ScalarQueryParameter("notes", "STRING", notes),
+                bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id),
+            ]
+        )
+        
+        job = client.query(query, job_config=job_config)
+        job.result()  # Wait for completion
         
         logger.info(f"✅ Registered ingest completion for snapshot {snapshot_id}")
         return True
@@ -137,7 +160,7 @@ def register_snapshot_ingest_complete(snapshot_id: str, data_counts: Dict[str, i
 
 def register_snapshot_failure(snapshot_id: str, error_message: str) -> bool:
     """
-    Register a snapshot failure.
+    Register a snapshot failure using parameterized query.
     
     Args:
         snapshot_id: The snapshot identifier
@@ -260,7 +283,7 @@ def get_latest_snapshot(status_filter: Optional[str] = None) -> Optional[Dict[st
         base_query = f"""
         SELECT 
             snapshot_id,
-            snapshot_timestamp,
+            record_timestamp,
             triggered_by,
             status,
             notes
@@ -268,14 +291,14 @@ def get_latest_snapshot(status_filter: Optional[str] = None) -> Optional[Dict[st
         """
         
         if status_filter:
-            query = f"{base_query} WHERE status = @status ORDER BY snapshot_timestamp DESC LIMIT 1"
+            query = f"{base_query} WHERE status = @status ORDER BY record_timestamp DESC LIMIT 1"
             job_config = bigquery.QueryJobConfig(
                 query_parameters=[
                     bigquery.ScalarQueryParameter("status", "STRING", status_filter)
                 ]
             )
         else:
-            query = f"{base_query} ORDER BY snapshot_timestamp DESC LIMIT 1"
+            query = f"{base_query} ORDER BY record_timestamp DESC LIMIT 1"
             job_config = bigquery.QueryJobConfig()
         
         result = client.query(query, job_config=job_config).result()
@@ -284,7 +307,7 @@ def get_latest_snapshot(status_filter: Optional[str] = None) -> Optional[Dict[st
         if latest:
             return {
                 'snapshot_id': latest.snapshot_id,
-                'snapshot_timestamp': latest.snapshot_timestamp,
+                'record_timestamp': latest.record_timestamp,
                 'triggered_by': latest.triggered_by,
                 'status': latest.status,
                 'notes': latest.notes

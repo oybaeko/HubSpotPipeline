@@ -78,7 +78,7 @@ def process_unit_score_for_snapshot(snapshot_id: str):
     project_id = os.getenv('BIGQUERY_PROJECT_ID')
     dataset_id = os.getenv('BIGQUERY_DATASET_ID')
 
-    # Build the SQL query
+    # Build the SQL query with consistent field names
     query = f"""
     -- Step 1: Filter companies for this snapshot
     WITH companies AS (
@@ -110,7 +110,7 @@ def process_unit_score_for_snapshot(snapshot_id: str):
     joined AS (
       SELECT
         c.snapshot_id,
-        CURRENT_TIMESTAMP() AS snapshot_timestamp,
+        CURRENT_TIMESTAMP() AS record_timestamp,
         c.company_id,
         d.deal_id,
         c.hubspot_owner_id AS owner_id,
@@ -204,7 +204,7 @@ def process_score_history_for_snapshot(snapshot_id: str):
     project_id = os.getenv('BIGQUERY_PROJECT_ID')
     dataset_id = os.getenv('BIGQUERY_DATASET_ID')
 
-    # Build the aggregation SQL
+    # Build the aggregation SQL with consistent field names
     query = f"""
     SELECT
       snapshot_id,
@@ -212,7 +212,7 @@ def process_score_history_for_snapshot(snapshot_id: str):
       combined_stage,
       COUNT(DISTINCT company_id) AS num_companies,
       SUM(adjusted_score) AS total_score,
-      MAX(snapshot_timestamp) AS snapshot_timestamp
+      CURRENT_TIMESTAMP() AS record_timestamp
     FROM `{project_id}.{dataset_id}.hs_pipeline_units_snapshot`
     WHERE snapshot_id = @snapshot_id
     GROUP BY snapshot_id, owner_id, combined_stage

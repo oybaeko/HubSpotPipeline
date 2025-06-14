@@ -16,9 +16,9 @@ SCHEMA_COMPANIES: List[Tuple[str, str]] = [
     ("company_type",           "STRING"),
 
     # ─── Development / Developer‐Count Fields ───────────────────────────────
-    ("development_category",   "STRING"),   # Enum: e.g. “Full‐stack”, “Frontend”, etc.
-    ("hiring_developers",      "STRING"),   # Enum: “Yes” / “No” / “Maybe”
-    ("inhouse_developers",     "STRING"),   # Enum: “None”/“1 or more”/“2 or more”/“4 or more”/“10 or more”
+    ("development_category",   "STRING"),   # Enum: e.g. "Full‐stack", "Frontend", etc.
+    ("hiring_developers",      "STRING"),   # Enum: "Yes" / "No" / "Maybe"
+    ("inhouse_developers",     "STRING"),   # Enum: "None"/"1 or more"/"2 or more"/"4 or more"/"10 or more"
     # ────────────────────────────────────────────────────────────────────────
 
     # ─── Proff‐Related Fields ───────────────────────────────────────────────
@@ -29,7 +29,7 @@ SCHEMA_COMPANIES: List[Tuple[str, str]] = [
     # ────────────────────────────────────────────────────────────────────────
 
     ("snapshot_id",            "STRING"),
-    ("timestamp",              "TIMESTAMP"),
+    ("record_timestamp",       "TIMESTAMP"),
 ]
 
 HUBSPOT_COMPANY_FIELD_MAP: Dict[str, str] = {
@@ -69,7 +69,7 @@ SCHEMA_CONTACTS: List[Tuple[str, str]] = [
     ("job_title",          "STRING"),
     ("lifecycle_stage",    "STRING"),
     ("snapshot_id",        "STRING"),  
-    ("timestamp",          "TIMESTAMP"),
+    ("record_timestamp",   "TIMESTAMP"),
 ]
 
 HUBSPOT_CONTACT_FIELD_MAP: Dict[str, str] = {
@@ -89,13 +89,13 @@ HUBSPOT_CONTACT_FIELD_MAP: Dict[str, str] = {
 # ─────────────────────────────────────────────────────────────────────────────────
 
 SCHEMA_OWNERS: List[Tuple[str, str]] = [
-    ("owner_id",   "STRING"),
-    ("email",      "STRING"),
-    ("first_name", "STRING"),
-    ("last_name",  "STRING"),
-    ("user_id",    "STRING"),
-    ("active",     "BOOLEAN"),
-    ("timestamp",  "TIMESTAMP"),
+    ("owner_id",           "STRING"),
+    ("email",              "STRING"),
+    ("first_name",         "STRING"),
+    ("last_name",          "STRING"),
+    ("user_id",            "STRING"),
+    ("active",             "BOOLEAN"),
+    ("record_timestamp",   "TIMESTAMP"),
 ]
 
 HUBSPOT_OWNER_FIELD_MAP: Dict[str, str] = {
@@ -120,8 +120,8 @@ SCHEMA_DEALS: List[Tuple[str, str]] = [
     ("amount",                "FLOAT"),
     ("owner_id",              "STRING"),
     ("associated_company_id", "STRING"),
-    ("timestamp",             "TIMESTAMP"),
     ("snapshot_id",           "STRING"),
+    ("record_timestamp",      "TIMESTAMP"),
 ]
 
 HUBSPOT_DEAL_FIELD_MAP: Dict[str, str] = {
@@ -140,13 +140,13 @@ HUBSPOT_DEAL_FIELD_MAP: Dict[str, str] = {
 # ─────────────────────────────────────────────────────────────────────────────────
 
 SCHEMA_DEAL_STAGE_REFERENCE: List[Tuple[str, str]] = [
-    ("pipeline_id",    "STRING"),
-    ("pipeline_label", "STRING"),
-    ("stage_id",       "STRING"),
-    ("stage_label",    "STRING"),
-    ("is_closed",      "BOOLEAN"),
-    ("probability",    "FLOAT"),
-    ("display_order",  "INTEGER"),
+    ("pipeline_id",        "STRING"),
+    ("pipeline_label",     "STRING"),
+    ("stage_id",           "STRING"),
+    ("stage_label",        "STRING"),
+    ("is_closed",          "BOOLEAN"),
+    ("probability",        "FLOAT"),
+    ("display_order",      "INTEGER"),
 ]
 
 
@@ -161,6 +161,7 @@ SCHEMA_STAGE_MAPPING: List[Tuple[str, str]] = [
     ("combined_stage",  "STRING"),
     ("stage_level",     "INTEGER"),
     ("adjusted_score",  "FLOAT"),
+    ("record_timestamp", "TIMESTAMP"),
 ]
 
 
@@ -169,8 +170,6 @@ SCHEMA_STAGE_MAPPING: List[Tuple[str, str]] = [
 # ─────────────────────────────────────────────────────────────────────────────────
 
 SCHEMA_PIPELINE_UNITS_SNAPSHOT: List[Tuple[str, str]] = [
-    ("snapshot_id",        "STRING"),
-    ("snapshot_timestamp", "TIMESTAMP"),
     ("company_id",         "STRING"),
     ("deal_id",            "STRING"),   # Nullable
     ("owner_id",           "STRING"),
@@ -180,7 +179,9 @@ SCHEMA_PIPELINE_UNITS_SNAPSHOT: List[Tuple[str, str]] = [
     ("combined_stage",     "STRING"),
     ("stage_level",        "INTEGER"),
     ("adjusted_score",     "FLOAT"),
-    ("stage_source",       "STRING"),   # “company” or “deal”
+    ("stage_source",       "STRING"),   # "company" or "deal"
+    ("snapshot_id",        "STRING"),
+    ("record_timestamp",   "TIMESTAMP"),
 ]
 
 
@@ -189,11 +190,11 @@ SCHEMA_PIPELINE_UNITS_SNAPSHOT: List[Tuple[str, str]] = [
 # ─────────────────────────────────────────────────────────────────────────────────
 
 SCHEMA_SNAPSHOT_REGISTRY: List[Tuple[str, str]] = [
-    ("snapshot_id",        "STRING"),
-    ("snapshot_timestamp", "TIMESTAMP"),
     ("triggered_by",       "STRING"),
     ("status",             "STRING"),
     ("notes",              "STRING"),
+    ("snapshot_id",        "STRING"),
+    ("record_timestamp",   "TIMESTAMP"),
 ]
 
 
@@ -202,12 +203,12 @@ SCHEMA_SNAPSHOT_REGISTRY: List[Tuple[str, str]] = [
 # ─────────────────────────────────────────────────────────────────────────────────
 
 SCHEMA_PIPELINE_SCORE_HISTORY: List[Tuple[str, str]] = [
-    ("snapshot_id",        "STRING"),
     ("owner_id",           "STRING"),
     ("combined_stage",     "STRING"),
     ("num_companies",      "INTEGER"),
     ("total_score",        "FLOAT"),
-    ("snapshot_timestamp", "TIMESTAMP"),
+    ("snapshot_id",        "STRING"),
+    ("record_timestamp",   "TIMESTAMP"),
 ]
 
 
@@ -234,7 +235,7 @@ def _validate_field_map_consistency(
     schema_cols = [col_name for (col_name, _) in schema]
 
     # Exempt any system columns that do not require mapping
-    exempt_columns = {"snapshot_id", "timestamp"}
+    exempt_columns = {"snapshot_id", "record_timestamp"}
     required_cols = [c for c in schema_cols if c not in exempt_columns]
 
     # 1) Check that each required schema column is a key in field_map
