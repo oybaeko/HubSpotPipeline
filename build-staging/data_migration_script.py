@@ -309,11 +309,6 @@ class DataMigrationManager:
         """Migrate production data to staging with correct timestamp and schema conversion"""
         self.logger.info(f"🚀 Starting prod to staging migration (dry_run={dry_run})")
         
-        if not dry_run:
-            # Create backup first
-            if not self.backup_staging_data():
-                self.logger.error("❌ Backup failed, aborting migration")
-                return False
         
         tables_to_migrate = ['hs_companies', 'hs_deals']
         success_count = 0
@@ -352,7 +347,7 @@ class DataMigrationManager:
             
             # Clear existing data in staging
             if not dry_run:
-                clear_query = f"DELETE FROM `{self.project_id}.Hubspot_staging.{table}` WHERE TRUE"
+                clear_query = f"TRUNCATE TABLE `{self.project_id}.Hubspot_staging.{table}`"
                 if not self.run_query(clear_query):
                     self.logger.error(f"❌ Failed to clear {table} in staging")
                     continue
@@ -395,7 +390,8 @@ class DataMigrationManager:
             self.logger.info(f"📊 Tables migrated: {success_count}/{len(tables_to_migrate)}")
         else:
             self.logger.error(f"❌ Migration partially failed: {success_count}/{len(tables_to_migrate)} tables")
-        
+        return migration_success  
+      
     def _build_migration_query(self, table: str, schema_comparison: Dict) -> str:
         """Build migration query with schema-aware field conversions"""
         
@@ -632,7 +628,7 @@ class DataMigrationManager:
             
             # Clear existing data in staging
             if not dry_run:
-                clear_query = f"DELETE FROM `{self.project_id}.Hubspot_staging.{table}` WHERE TRUE"
+                clear_query = f"TRUNCATE TABLE `{self.project_id}.Hubspot_staging.{table}`"
                 if not self.run_query(clear_query):
                     self.logger.error(f"❌ Failed to clear {table} in staging")
                     continue

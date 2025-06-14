@@ -103,6 +103,7 @@ def _map_company_data(df: pd.DataFrame, snapshot_id: str) -> List[Dict]:
             # Build record following hs_companies schema
             record = {
                 'snapshot_id': snapshot_id,
+                'timestamp': datetime.now(timezone.utc),
             }
             
             # Map Excel columns to BigQuery columns
@@ -166,6 +167,7 @@ def _map_deal_data(df: pd.DataFrame, snapshot_id: str) -> List[Dict]:
         try:
             record = {
                 'snapshot_id': snapshot_id,
+                'timestamp': datetime.now(timezone.utc),
             }
             
             # Map Excel columns to BigQuery columns

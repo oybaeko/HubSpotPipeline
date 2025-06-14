@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Main Migration Orchestrator
-Orchestrates the complete staging environment setup and data migration from production
+Main Migration Orchestrator - COMPLETE VERSION
+Includes Excel import integration for historical data
+4-Step Process: Clean → Create → Migrate → Import Historical
 """
 
 import sys
@@ -29,7 +30,7 @@ except ImportError:
     BIGQUERY_AVAILABLE = False
 
 class MainMigrationOrchestrator:
-    """Orchestrates the complete staging setup and data migration"""
+    """Complete staging setup and data migration with Excel import"""
     
     def __init__(self):
         self.project_id = "hubspot-452402"
@@ -48,12 +49,12 @@ class MainMigrationOrchestrator:
         # Get authentication info
         self.auth_info = self._get_auth_info()
             
-        # Migration steps status
+        # Migration steps status - COMPLETE 4-step process
         self.steps_completed = {
             'clean_dataset': False,
             'create_tables': False,
-            'clear_data': False,
-            'migrate_data': False
+            'migrate_data': False,
+            'import_excel': False
         }
     
     def _get_auth_info(self) -> Dict:
@@ -187,35 +188,11 @@ class MainMigrationOrchestrator:
             with tempfile.NamedTemporaryFile(mode='w+', suffix='.json', delete=False) as temp_file:
                 temp_file_path = temp_file.name
             
-            with tempfile.NamedTemporaryFile(mode='w+', suffix='.txt', delete=False) as error_file:
-                error_file_path = error_file.name
-            
             self.logger.info(f"🚀 Calling staging cloud function...")
             self.logger.info(f"📡 URL: {staging_url}")
             self.logger.info(f"📦 Payload: {json.dumps(payload, indent=2)}")
             
-            # First, let's try a simple health check
-            self.logger.info("🏥 Testing basic connectivity...")
-            ping_payload = {"log_level": "INFO"}
-            
-            ping_cmd = [
-                'curl', '-X', 'POST', staging_url,
-                '-H', 'Content-Type: application/json',
-                '-d', json.dumps(ping_payload),
-                '-w', 'HTTP:%{http_code} Time:%{time_total}s',
-                '--max-time', '30',
-                '--connect-timeout', '10'
-            ]
-            
-            ping_result = subprocess.run(ping_cmd, capture_output=True, text=True, timeout=60)
-            self.logger.info(f"🏥 Ping result: {ping_result.stdout}")
-            if ping_result.stderr:
-                self.logger.warning(f"🏥 Ping stderr: {ping_result.stderr}")
-            
-            # Now try the actual E2E test with more debugging
-            self.logger.info("🔬 Running E2E test with full debugging...")
-            
-            # Execute curl command with verbose output
+            # Execute curl command
             curl_cmd = [
                 'curl', '-X', 'POST', staging_url,
                 '-H', 'Content-Type: application/json',
@@ -223,32 +200,19 @@ class MainMigrationOrchestrator:
                 '-o', temp_file_path,
                 '-w', 'HTTP:%{http_code} Time:%{time_total}s Size:%{size_download}bytes',
                 '--max-time', '300',  # 5 minute timeout
-                '--connect-timeout', '30',
-                '-v'  # Verbose output for debugging
+                '--connect-timeout', '30'
             ]
-            
-            self.logger.info(f"🔧 Full curl command: {' '.join(curl_cmd)}")
             
             result = subprocess.run(curl_cmd, capture_output=True, text=True, timeout=320)
             
-            self.logger.info(f"📊 Curl output: {result.stdout}")
-            if result.stderr:
-                self.logger.info(f"📊 Curl verbose: {result.stderr}")
-            
-            # Parse the metrics from stdout
-            metrics = result.stdout.strip()
-            self.logger.info(f"📈 Response metrics: {metrics}")
+            self.logger.info(f"📊 Curl metrics: {result.stdout}")
             
             # Read response content
             response_content = ""
-            response_size = 0
             try:
                 with open(temp_file_path, 'r') as f:
                     response_content = f.read()
-                response_size = len(response_content)
-                self.logger.info(f"📄 Response size: {response_size} characters")
-                self.logger.info(f"📄 Response preview: {response_content[:500]}...")
-                
+                self.logger.info(f"📄 Response size: {len(response_content)} characters")
                 os.unlink(temp_file_path)  # Clean up temp file
             except Exception as e:
                 self.logger.error(f"❌ Failed to read response file: {e}")
@@ -259,34 +223,27 @@ class MainMigrationOrchestrator:
                 if response_content.strip():
                     response_data = json.loads(response_content)
                     self.logger.info(f"✅ Successfully parsed JSON response")
-                    self.logger.info(f"📋 Response keys: {list(response_data.keys())}")
                 else:
                     self.logger.error("❌ Empty response content")
                     return False
             except json.JSONDecodeError as e:
                 self.logger.error(f"❌ Failed to parse JSON response: {e}")
-                self.logger.error(f"📄 Raw response: {response_content}")
                 return False
             
             # Check HTTP status from metrics
-            if 'HTTP:200' in metrics:
-                self.logger.info("✅ HTTP 200 - Success")
-            elif 'HTTP:206' in metrics:
-                self.logger.info("✅ HTTP 206 - Partial Success")
+            if 'HTTP:200' in result.stdout or 'HTTP:206' in result.stdout:
+                self.logger.info("✅ HTTP Success")
             else:
-                self.logger.error(f"❌ Non-success HTTP status in: {metrics}")
-                self.logger.error(f"📄 Response: {response_data}")
+                self.logger.error(f"❌ Non-success HTTP status")
                 return False
             
             # Analyze response structure
             if response_data.get('test_mode') == True:
-                self.logger.info("🧪 Detected test framework response")
                 return self._handle_test_framework_response(response_data)
             elif 'status' in response_data:
-                self.logger.info("⚙️ Detected functional pipeline response")
                 return self._handle_functional_response(response_data)
             else:
-                self.logger.error(f"❌ Unknown response format: {response_data}")
+                self.logger.error(f"❌ Unknown response format")
                 return False
                 
         except subprocess.TimeoutExpired:
@@ -294,8 +251,6 @@ class MainMigrationOrchestrator:
             return False
         except Exception as e:
             self.logger.error(f"❌ Failed to call cloud function: {e}")
-            import traceback
-            self.logger.debug(f"Full traceback: {traceback.format_exc()}")
             return False
     
     def _handle_test_framework_response(self, response_data: Dict) -> bool:
@@ -321,12 +276,6 @@ class MainMigrationOrchestrator:
         else:
             error = response_data.get('error', 'Unknown error')
             self.logger.error(f"❌ E2E test failed: {error}")
-            
-            # Show failed tests
-            failed_tests = response_data.get('details', {}).get('failed_tests', [])
-            for test in failed_tests:
-                self.logger.error(f"  • {test.get('name', 'Unknown')}: {test.get('error', 'No details')}")
-            
             return False
     
     def _handle_functional_response(self, response_data: Dict) -> bool:
@@ -338,10 +287,8 @@ class MainMigrationOrchestrator:
         if status == 'success':
             total_records = response_data.get('total_records', 0)
             snapshot_id = response_data.get('snapshot_id', 'N/A')
-            results = response_data.get('results', {})
             
             self.logger.info(f"✅ Pipeline completed: {total_records} records, snapshot: {snapshot_id}")
-            self.logger.info(f"📊 Results breakdown: {results}")
             
             # Verify tables were created in staging
             if self._verify_staging_tables():
@@ -374,73 +321,26 @@ class MainMigrationOrchestrator:
             self.logger.warning(f"⚠️  Could not verify staging tables: {e}")
             return False
     
-    def step_3_clear_all_data(self) -> bool:
-        """Step 3: Delete all rows in all tables (skip views)"""
-        self.logger.info("🧹 STEP 3: Clearing all data from tables")
+    def step_3_migrate_prod_to_staging(self) -> bool:
+        """Step 3: Migrate ONLY companies and deals from prod to staging (includes table clearing)"""
+        self.logger.info("🚀 STEP 3: Migrating data from production to staging")
+        self.logger.info("📊 This will migrate ONLY companies and deals")
+        self.logger.info("🧹 Migration includes automatic table clearing")
         
         try:
-            # List tables
-            dataset_ref = self.client.dataset(self.staging_dataset)
-            all_objects = list(self.client.list_tables(dataset_ref))
-            
-            # Filter to only tables (not views)
-            tables = [obj for obj in all_objects if obj.table_type == 'TABLE']
-            views = [obj for obj in all_objects if obj.table_type == 'VIEW']
-            
-            if not tables:
-                self.logger.warning("⚠️  No tables found to clear")
-                return False
-            
-            self.logger.info(f"📋 Found {len(tables)} tables and {len(views)} views")
-            self.logger.info(f"🧹 Clearing data from {len(tables)} tables (skipping {len(views)} views):")
-            
-            # Log what we're skipping
-            if views:
-                self.logger.info(f"⏭️  Skipping views (cannot be truncated):")
-                for view in views:
-                    self.logger.info(f"  • {view.table_id} (VIEW)")
-            
-            cleared_count = 0
-            for table in tables:
-                try:
-                    # TRUNCATE is faster than DELETE for clearing all data
-                    table_ref = f"{self.project_id}.{self.staging_dataset}.{table.table_id}"
-                    truncate_query = f"TRUNCATE TABLE `{table_ref}`"
-                    
-                    job = self.client.query(truncate_query)
-                    job.result()  # Wait for completion
-                    
-                    self.logger.info(f"🧹 Cleared {table.table_id}")
-                    cleared_count += 1
-                    
-                except Exception as e:
-                    self.logger.error(f"❌ Failed to clear {table.table_id}: {e}")
-            
-            self.logger.info(f"✅ Cleared {cleared_count}/{len(tables)} tables")
-            self.steps_completed['clear_data'] = cleared_count == len(tables)
-            return self.steps_completed['clear_data']
-            
-        except Exception as e:
-            self.logger.error(f"❌ Failed to clear data: {e}")
-            return False
-    
-    def step_4_migrate_prod_to_staging(self) -> bool:
-        """Step 4: Migrate data from prod to staging"""
-        self.logger.info("🚀 STEP 4: Migrating data from production to staging")
-        
-        try:
-            # Import the migration manager
             from data_migration_script import DataMigrationManager
             
-            # Initialize migration manager
             migration_manager = DataMigrationManager()
             
-            # Run full migration pipeline (live mode)
-            self.logger.info("🎯 Running full migration pipeline...")
-            success = migration_manager.full_migration_pipeline(dry_run=False)
+            # Migration automatically clears tables before inserting data
+            self.logger.info("🎯 Running data migration (companies + deals with auto-clear)...")
+            success = migration_manager.migrate_prod_to_staging(dry_run=False)
             
             if success:
                 self.logger.info("✅ Production data migrated successfully")
+                self.logger.info("📊 Migrated: companies and deals")
+                self.logger.info("💡 Tables were automatically cleared before migration")
+                self.logger.info("💡 Reference data will come from ingest pipeline")
                 self.steps_completed['migrate_data'] = True
                 return True
             else:
@@ -453,13 +353,387 @@ class MainMigrationOrchestrator:
             self.logger.debug(f"Full traceback: {traceback.format_exc()}")
             return False
     
+    def step_4_import_historical_excel_data(self) -> bool:
+        """Step 4: Import historical Excel data with CRM metadata support"""
+        self.logger.info("📥 STEP 4: Importing historical Excel data")
+        self.logger.info("📊 This will import multiple historical snapshots")
+        self.logger.info("🕐 Will use CRM file timestamps if available")
+        
+        try:
+            # Check Excel import availability
+            if not self._check_excel_import_availability():
+                return False
+            
+            # Excel file selection
+            excel_file = self._select_excel_file()
+            if not excel_file:
+                self.logger.error("❌ No Excel file selected")
+                return False
+            
+            # Check for CRM files in the same directory
+            import_dir = Path(excel_file).parent
+            crm_metadata = self._extract_crm_metadata(import_dir)
+            
+            if crm_metadata:
+                self.logger.info(f"✅ Found CRM metadata for {len(crm_metadata)} snapshots")
+                self.logger.info("🕐 Will use actual HubSpot export timestamps")
+            else:
+                self.logger.info("📅 No CRM files found, will use Excel sheet dates")
+            
+            # Confirm operation
+            if not self._confirm_excel_import(excel_file, crm_metadata):
+                self.logger.info("❌ Excel import cancelled")
+                return False
+            
+            # Import Excel functionality
+            excel_import_path = Path(__file__).parent / "first_stage_data"
+            sys.path.insert(0, str(excel_import_path))
+            
+            from excel_import import ExcelProcessor, SnapshotProcessor
+            from excel_import.bigquery_loader import load_multiple_snapshots
+            
+            # Process Excel file
+            self.logger.info(f"📂 Processing Excel file: {Path(excel_file).name}")
+            processor = ExcelProcessor(excel_file)
+            snapshot_processor = SnapshotProcessor(processor)
+            
+            # Validate sheets exist
+            found_sheets, missing_sheets = processor.validate_snapshot_sheets()
+            if missing_sheets:
+                self.logger.warning(f"⚠️ Missing {len(missing_sheets)} expected sheets")
+                if not self._confirm_proceed_with_missing_sheets(missing_sheets):
+                    return False
+            
+            # Process snapshots with or without CRM metadata
+            self.logger.info("🔄 Processing Excel snapshots...")
+            if crm_metadata:
+                # Use CRM timestamps
+                result = snapshot_processor.process_all_snapshots_with_crm_metadata(crm_metadata)
+                self.logger.info("🕐 Using CRM file download timestamps as snapshot_id")
+            else:
+                # Use Excel dates
+                result = snapshot_processor.process_all_snapshots()
+                self.logger.info("📅 Using Excel sheet dates as snapshot_id")
+            
+            snapshots_data = result['snapshots']
+            
+            if not snapshots_data:
+                self.logger.error("❌ No snapshot data extracted from Excel")
+                return False
+            
+            self.logger.info(f"✅ Extracted {len(snapshots_data)} snapshots")
+            self.logger.info(f"📊 Total records: {result['totals']['total_records']}")
+            self.logger.info(f"🏢 Companies: {result['totals']['companies']}")
+            self.logger.info(f"🤝 Deals: {result['totals']['deals']}")
+            
+            # Set environment for Excel import
+            import os
+            os.environ['BIGQUERY_PROJECT_ID'] = self.project_id
+            os.environ['BIGQUERY_DATASET_ID'] = self.staging_dataset
+            
+            # Load to BigQuery (staging environment) 
+            self.logger.info("📤 Loading historical data to staging...")
+            self.logger.info("🕐 Adding current timestamp to all Excel records...")
+            load_multiple_snapshots(snapshots_data, dry_run=False)
+            
+            self.logger.info("✅ Historical Excel data imported successfully")
+            self.logger.info(f"📸 Snapshots imported: {len(snapshots_data)}")
+            
+            if crm_metadata:
+                self.logger.info("🕐 Snapshot IDs contain precise HubSpot export timestamps")
+                # Show sample timestamps
+                sample_snapshots = list(snapshots_data.keys())[:3]
+                for snapshot_id in sample_snapshots:
+                    self.logger.info(f"   📅 Example: {snapshot_id}")
+            else:
+                self.logger.info("📅 Snapshot IDs are Excel sheet dates")
+            
+            self.steps_completed['import_excel'] = True
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Failed to import Excel data: {e}")
+            import traceback
+            self.logger.debug(f"Full traceback: {traceback.format_exc()}")
+            return False
+    
+    def _extract_crm_metadata(self, import_dir: Path) -> Dict:
+        """Extract CRM metadata from CSV files in import directory"""
+        try:
+            # Find CRM CSV files
+            csv_files = list(import_dir.glob("hubspot-crm-exports-*.csv"))
+            
+            if not csv_files:
+                return {}
+            
+            self.logger.info(f"🔍 Analyzing {len(csv_files)} CRM CSV files...")
+            
+            # Group files by date
+            crm_metadata = {}
+            
+            for csv_file in csv_files:
+                # Extract date from filename
+                import re
+                date_match = re.search(r'(\d{4}-\d{2}-\d{2})', csv_file.name)
+                if not date_match:
+                    continue
+                
+                snapshot_date = date_match.group(1)
+                
+                # Get file timestamp
+                timestamp = self._get_file_timestamp(csv_file)
+                if not timestamp:
+                    # Fallback: use current time if file timestamp extraction fails
+                    import datetime
+                    timestamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+                    self.logger.debug(f"Using current time as fallback for {csv_file.name}: {timestamp}")
+                
+                # Initialize metadata for this date
+                if snapshot_date not in crm_metadata:
+                    crm_metadata[snapshot_date] = {
+                        'company_file': None,
+                        'deals_file': None,
+                        'company_timestamp': None,
+                        'deals_timestamp': None
+                    }
+                
+                # Classify file type and store info
+                if 'company' in csv_file.name.lower():
+                    crm_metadata[snapshot_date]['company_file'] = str(csv_file)
+                    crm_metadata[snapshot_date]['company_timestamp'] = timestamp
+                elif 'deal' in csv_file.name.lower():
+                    crm_metadata[snapshot_date]['deals_file'] = str(csv_file)
+                    crm_metadata[snapshot_date]['deals_timestamp'] = timestamp
+            
+            # Create final metadata with snapshot_id
+            final_metadata = {}
+            for snapshot_date, files in crm_metadata.items():
+                if files['company_file'] and files['deals_file']:
+                    # Use the earlier timestamp as snapshot_id
+                    company_time = files['company_timestamp']
+                    deals_time = files['deals_timestamp']
+                    snapshot_id = min(company_time, deals_time) if company_time and deals_time else company_time or deals_time
+                    
+                    final_metadata[snapshot_date] = {
+                        'snapshot_id': snapshot_id,
+                        **files
+                    }
+            
+            self.logger.info(f"✅ Extracted CRM metadata for {len(final_metadata)} complete snapshot dates")
+            return final_metadata
+            
+        except Exception as e:
+            self.logger.warning(f"⚠️  Failed to extract CRM metadata: {e}")
+            return {}
+    
+    def _get_file_timestamp(self, file_path: Path) -> Optional[str]:
+        """Get file modification timestamp in Z format to match production format"""
+        try:
+            import datetime
+            
+            # Get file modification time
+            mtime = file_path.stat().st_mtime
+            dt = datetime.datetime.fromtimestamp(mtime, tz=datetime.timezone.utc)
+            
+            # Return in Z format: 2025-06-08T04:00:11.000000Z
+            return dt.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            
+        except Exception as e:
+            self.logger.debug(f"Failed to get timestamp for {file_path}: {e}")
+            # Fallback: use current time if file timestamp fails
+            return datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+    
+    def _check_excel_import_availability(self) -> bool:
+        """Check if Excel import modules are available"""
+        try:
+            excel_import_path = Path(__file__).parent / "first_stage_data"
+            if not excel_import_path.exists():
+                self.logger.error(f"❌ Excel import directory not found: {excel_import_path}")
+                return False
+            
+            # Check key files exist
+            required_files = [
+                "excel_import/__init__.py",
+                "excel_import/excel_processor.py",
+                "excel_import/bigquery_loader.py"
+            ]
+            
+            for file in required_files:
+                if not (excel_import_path / file).exists():
+                    self.logger.error(f"❌ Required Excel import file not found: {file}")
+                    return False
+            
+            self.logger.info("✅ Excel import modules available")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error checking Excel import availability: {e}")
+            return False
+    
+    def _select_excel_file(self) -> Optional[str]:
+        """Select Excel file for import"""
+        import_dir = Path(__file__).parent / "import_data"
+        
+        print(f"\n📁 Import file selection:")
+        print(f"   Directory: {import_dir}")
+        
+        # Create directory if it doesn't exist
+        if not import_dir.exists():
+            print(f"📁 Creating import directory: {import_dir}")
+            import_dir.mkdir(parents=True, exist_ok=True)
+        
+        # List available files
+        excel_files = list(import_dir.glob("*.xlsx")) + list(import_dir.glob("*.xls"))
+        csv_files = list(import_dir.glob("hubspot-crm-exports-*.csv"))
+        
+        print(f"\n📊 Available files:")
+        print(f"   📋 Excel files: {len(excel_files)}")
+        print(f"   📄 CRM CSV files: {len(csv_files)}")
+        
+        if excel_files:
+            print(f"\n📋 Excel files ({len(excel_files)}):")
+            for i, file in enumerate(excel_files, 1):
+                try:
+                    size_mb = file.stat().st_size / 1024 / 1024
+                    print(f"   {i:2}. {file.name} ({size_mb:.1f} MB)")
+                except:
+                    print(f"   {i:2}. {file.name}")
+        
+        if csv_files:
+            print(f"\n📄 CRM CSV files found ({len(csv_files)}):")
+            # Group by date
+            csv_by_date = {}
+            for csv_file in csv_files:
+                # Extract date from filename: hubspot-crm-exports-weekly-status-company-2025-03-21.csv
+                import re
+                date_match = re.search(r'(\d{4}-\d{2}-\d{2})', csv_file.name)
+                if date_match:
+                    date = date_match.group(1)
+                    if date not in csv_by_date:
+                        csv_by_date[date] = []
+                    csv_by_date[date].append(csv_file)
+            
+            for date in sorted(csv_by_date.keys()):
+                files = csv_by_date[date]
+                print(f"   📅 {date}: {len(files)} files")
+                for file in files:
+                    file_type = "companies" if "company" in file.name else "deals" if "deal" in file.name else "other"
+                    print(f"      • {file_type}: {file.name}")
+        
+        if excel_files:
+            print(f"\n   Options:")
+            print(f"   • Enter number (1-{len(excel_files)}) to select Excel file")
+            print(f"   • Enter full path for custom file")
+            print(f"   • Press Enter to cancel")
+            
+            while True:
+                choice = input(f"\nYour choice: ").strip()
+                
+                if not choice:
+                    return None
+                
+                # Select by number
+                try:
+                    file_num = int(choice)
+                    if 1 <= file_num <= len(excel_files):
+                        selected_file = str(excel_files[file_num - 1])
+                        
+                        # Check if CRM files are available for timestamp extraction
+                        if csv_files:
+                            print(f"\n💡 CRM CSV files detected!")
+                            print(f"   ✅ Will use actual HubSpot export timestamps")
+                            print(f"   ✅ More precise than Excel sheet dates")
+                        else:
+                            print(f"\n⚠️  No CRM CSV files found")
+                            print(f"   📅 Will use Excel sheet dates as timestamps")
+                        
+                        return selected_file
+                    else:
+                        print(f"❌ Invalid number. Please enter 1-{len(excel_files)}")
+                        continue
+                except ValueError:
+                    pass
+                
+                # Custom path
+                file_path = Path(choice).expanduser()
+                if not file_path.is_absolute():
+                    file_path = import_dir / file_path
+                
+                if file_path.exists() and file_path.suffix.lower() in ['.xlsx', '.xls']:
+                    return str(file_path)
+                else:
+                    print(f"❌ File not found or not Excel format: {file_path}")
+                    retry = input("   Try again? (y/n): ").strip().lower()
+                    if retry not in ['y', 'yes']:
+                        return None
+        else:
+            print(f"\n⚠️  No Excel files found in {import_dir}")
+            print(f"💡 Place files in: {import_dir}")
+            print(f"💡 Expected files:")
+            print(f"   📋 pipeline-import.xlsx")
+            print(f"   📄 hubspot-crm-exports-weekly-status-company-*.csv")
+            print(f"   📄 hubspot-crm-exports-weekly-status-deals-*.csv")
+            
+            # Manual file entry option
+            manual_path = input(f"\nEnter full path to Excel file (or press Enter to skip): ").strip()
+            if manual_path:
+                file_path = Path(manual_path).expanduser()
+                if file_path.exists() and file_path.suffix.lower() in ['.xlsx', '.xls']:
+                    return str(file_path)
+                else:
+                    print(f"❌ File not found: {file_path}")
+        
+        return None
+    
+    def _confirm_excel_import(self, excel_file: str, crm_metadata: Dict = None) -> bool:
+        """Confirm Excel import operation"""
+        print(f"\n📊 EXCEL IMPORT CONFIRMATION")
+        print(f"File: {Path(excel_file).name}")
+        print(f"Target: staging environment ({self.staging_dataset})")
+        
+        if crm_metadata:
+            print(f"🕐 CRM Timestamps: YES ({len(crm_metadata)} snapshots)")
+            print(f"   ✅ Will use actual HubSpot export timestamps as snapshot_id")
+            print(f"   ✅ More precise timing than Excel sheet dates")
+            
+            # Show sample timestamps
+            sample_dates = list(crm_metadata.keys())[:3]
+            for date in sample_dates:
+                snapshot_id = crm_metadata[date]['snapshot_id']
+                print(f"   📅 {date} → {snapshot_id}")
+            if len(crm_metadata) > 3:
+                print(f"   📅 ... and {len(crm_metadata) - 3} more")
+        else:
+            print(f"📅 CRM Timestamps: NO")
+            print(f"   ⚠️  Will use Excel sheet dates as snapshot_id")
+            print(f"   💡 For precise timestamps, place CRM CSV files in import_data/")
+        
+        print(f"\nThis will import historical snapshots to staging")
+        print(f"Data will be ADDED to existing production data")
+        
+        confirm = input(f"\nType 'IMPORT EXCEL' to continue: ").strip()
+        return confirm == 'IMPORT EXCEL'
+    
+    def _confirm_proceed_with_missing_sheets(self, missing_sheets: List[str]) -> bool:
+        """Confirm proceeding with missing sheets"""
+        print(f"\n⚠️ MISSING SHEETS WARNING")
+        print(f"Missing {len(missing_sheets)} expected sheets:")
+        for sheet in missing_sheets[:5]:
+            print(f"  • {sheet}")
+        if len(missing_sheets) > 5:
+            print(f"  • ... and {len(missing_sheets) - 5} more")
+        
+        print(f"\nThis will import only the available sheets.")
+        confirm = input(f"Proceed with available sheets? (y/n): ").strip().lower()
+        return confirm in ['y', 'yes']
+    
     def run_single_step(self, step_number: int) -> bool:
-        """Run a single step"""
+        """Run a single step - COMPLETE 4-step process"""
         steps = {
             1: ("Clean staging dataset", self.step_1_clean_staging_dataset),
             2: ("Create tables via staging cloud function", self.step_2_create_tables_via_e2e_test),
-            3: ("Clear all data", self.step_3_clear_all_data),
-            4: ("Migrate prod to staging", self.step_4_migrate_prod_to_staging)
+            3: ("Migrate prod to staging (companies + deals)", self.step_3_migrate_prod_to_staging),
+            4: ("Import historical Excel data", self.step_4_import_historical_excel_data)
         }
         
         if step_number not in steps:
@@ -485,10 +759,10 @@ class MainMigrationOrchestrator:
         return success
     
     def run_all_steps(self) -> bool:
-        """Run all migration steps in sequence"""
+        """Run all migration steps in sequence - COMPLETE 4-step process"""
         self.logger.info("🚀 FULL MIGRATION: Running all steps")
         
-        steps = [1, 2, 3, 4]
+        steps = [1, 2, 3, 4]  # Complete 4-step process
         
         for step_num in steps:
             if not self.run_single_step(step_num):
@@ -504,15 +778,15 @@ class MainMigrationOrchestrator:
         return True
     
     def show_status(self) -> None:
-        """Show current migration status"""
+        """Show current migration status - COMPLETE 4-step process"""
         print(f"\n📊 MIGRATION STATUS")
         print("=" * 50)
         
         steps = [
             ("1. Clean staging dataset", self.steps_completed['clean_dataset']),
             ("2. Create tables via staging cloud function", self.steps_completed['create_tables']),
-            ("3. Clear all data", self.steps_completed['clear_data']),
-            ("4. Migrate prod to staging", self.steps_completed['migrate_data'])
+            ("3. Migrate prod to staging (companies + deals + auto-clear)", self.steps_completed['migrate_data']),
+            ("4. Import historical Excel data (multiple snapshots)", self.steps_completed['import_excel'])
         ]
         
         for step_name, completed in steps:
@@ -521,6 +795,12 @@ class MainMigrationOrchestrator:
         
         completed_count = sum(self.steps_completed.values())
         print(f"\nProgress: {completed_count}/4 steps completed")
+        
+        print(f"\n💡 COMPLETE WORKFLOW:")
+        print(f"  • Step 1: Clean environment")
+        print(f"  • Step 2: Create table structure")
+        print(f"  • Step 3: Import current production data")
+        print(f"  • Step 4: Import historical Excel data")
     
     def show_final_summary(self) -> None:
         """Show final migration summary"""
@@ -549,14 +829,28 @@ class MainMigrationOrchestrator:
                         break
                 except:
                     print(f"  • {table_name}: Could not count")
+            
+            # Count snapshots
+            try:
+                table_ref = f"{self.project_id}.{self.staging_dataset}.hs_companies"
+                snapshot_query = f"SELECT COUNT(DISTINCT snapshot_id) as snapshots FROM `{table_ref}`"
+                result = self.client.query(snapshot_query).result()
+                
+                for row in result:
+                    print(f"  • Unique snapshots: {row.snapshots}")
+                    break
+            except:
+                print(f"  • Snapshots: Could not count")
                     
         except Exception as e:
             self.logger.debug(f"Could not generate summary: {e}")
         
-        print(f"\n✅ Staging environment is ready for testing and development!")
+        print(f"\n✅ Staging environment ready!")
+        print(f"📊 Contains production + historical data")
+        print(f"💡 Run ingest pipeline to populate reference data")
     
     def interactive_menu(self):
-        """Interactive menu for migration orchestration"""
+        """Interactive menu for migration orchestration - COMPLETE 4-step process"""
         while True:
             print(f"\n{'='*60}")
             print(f"🚀 MAIN MIGRATION ORCHESTRATOR")
@@ -576,8 +870,8 @@ class MainMigrationOrchestrator:
             print(f"\n📋 OPERATIONS")
             print(f"  1) 🗑️  Step 1: Clean staging dataset")
             print(f"  2) 🏗️  Step 2: Create tables via staging cloud function")
-            print(f"  3) 🧹 Step 3: Clear all data")
-            print(f"  4) 🚀 Step 4: Migrate prod to staging")
+            print(f"  3) 🚀 Step 3: Migrate prod to staging (companies + deals + auto-clear)")
+            print(f"  4) 📥 Step 4: Import historical Excel data")
             print(f"  9) 🎯 Run ALL steps")
             print(f"  0) ❌ Exit")
             
@@ -591,11 +885,13 @@ class MainMigrationOrchestrator:
                     self.run_single_step(int(choice))
                 elif choice == '9':
                     print(f"\n🚨 FULL MIGRATION CONFIRMATION")
-                    print(f"This will:")
+                    print(f"This will run the complete 4-step process:")
                     print(f"  1. DELETE all tables in staging")
                     print(f"  2. Create new table structure")
-                    print(f"  3. Clear any sample data")
-                    print(f"  4. Migrate ALL production data")
+                    print(f"  3. Migrate companies and deals from production")
+                    print(f"  4. Import historical Excel data (multiple snapshots)")
+                    print(f"  💡 Complete staging setup with production + historical data")
+                    print(f"  ⚡ Reference data will come from ingest pipeline")
                     
                     confirm = input(f"\nType 'RUN FULL MIGRATION' to continue: ").strip()
                     if confirm == 'RUN FULL MIGRATION':

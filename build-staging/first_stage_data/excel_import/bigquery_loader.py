@@ -18,6 +18,7 @@ def load_to_bigquery(mapped_data: Dict[str, List[Dict]], dry_run: bool = True):
     
     # Import here to avoid circular imports
     import os
+    from datetime import datetime
     project_id = os.getenv('BIGQUERY_PROJECT_ID')
     dataset_id = os.getenv('BIGQUERY_DATASET_ID')
     
@@ -33,7 +34,14 @@ def load_to_bigquery(mapped_data: Dict[str, List[Dict]], dry_run: bool = True):
         if not records:
             logger.info(f"ℹ️ No {data_type} records to load")
             continue
-            
+        
+        # Fix datetime serialization for BigQuery
+        logger.info(f"🕐 Converting datetime objects for BigQuery compatibility...")
+        for record in records:
+            if 'timestamp' in record and isinstance(record['timestamp'], datetime):
+                # Convert datetime to BigQuery-compatible ISO string
+                record['timestamp'] = record['timestamp'].isoformat()
+                
         table_name = TABLE_NAMES[data_type]
         table_id = f"{project_id}.{dataset_id}.{table_name}"
         
