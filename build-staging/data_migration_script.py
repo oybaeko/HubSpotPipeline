@@ -36,19 +36,77 @@ class DataMigrationManager:
             'prod': 'Hubspot_prod'
         }
         
-        # Migration configuration
-        self.prod_snapshot_timestamp = "2025-06-08T04:00:11Z"  # Jun 8, 14:00 UTC+10 -> UTC
+        # Migration configuration - Updated to match new microsecond format
+        self.prod_snapshot_timestamp = "2025-06-08T04:00:11.000000Z"  # Jun 8, 14:00 UTC+10 -> UTC
         self.migration_snapshot_id = self.prod_snapshot_timestamp
         
         # Setup logging
         logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
         self.logger = logging.getLogger('data_migration')
         
-        # Initialize BigQuery client
+        # Force use of user credentials by clearing service account env var
+        import os
+        if 'GOOGLE_APPLICATION_CREDENTIALS' in os.environ:
+            self.logger.info("🔧 Clearing service account credentials to use user auth")
+            del os.environ['GOOGLE_APPLICATION_CREDENTIALS']
+        
+        # Initialize BigQuery client and get auth info (same as access manager)
         if BIGQUERY_AVAILABLE:
             self.client = bigquery.Client(project=self.project_id)
+            self.auth_info = self._get_auth_info()
         else:
             self.client = None
+            self.auth_info = None
+    
+    def _get_auth_info(self) -> Dict:
+        """Get current authentication information"""
+        auth_info = {
+            'bigquery_user': 'Unknown',
+            'gcloud_user': 'Unknown',
+            'credentials_type': 'Unknown',
+            'using_service_account': False,
+            'env_var_set': False
+        }
+        
+        try:
+            # Check environment variable
+            import os
+            env_creds = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+            if env_creds:
+                auth_info['env_var_set'] = True
+                auth_info['env_var_path'] = env_creds
+                auth_info['using_service_account'] = True
+            
+            # Get gcloud user
+            import subprocess
+            result = subprocess.run("gcloud config get-value account", 
+                                  shell=True, capture_output=True, text=True, check=False)
+            if result.returncode == 0:
+                auth_info['gcloud_user'] = result.stdout.strip()
+            
+            # Get BigQuery client credentials info
+            from google.auth import default
+            credentials, project = default()
+            auth_info['credentials_type'] = type(credentials).__name__
+            auth_info['bigquery_project'] = project
+            
+            # Try to get user email from credentials
+            if hasattr(credentials, 'service_account_email'):
+                auth_info['bigquery_user'] = credentials.service_account_email
+                auth_info['using_service_account'] = True
+            elif hasattr(credentials, 'token') and hasattr(credentials, '_id_token'):
+                # User credentials - try to extract email
+                try:
+                    import jwt
+                    decoded = jwt.decode(credentials._id_token, options={"verify_signature": False})
+                    auth_info['bigquery_user'] = decoded.get('email', 'User account')
+                except:
+                    auth_info['bigquery_user'] = 'User account'
+            
+        except Exception as e:
+            auth_info['error'] = str(e)
+        
+        return auth_info
     
     def run_query(self, query: str, dry_run: bool = False) -> Optional[bigquery.QueryJob]:
         """Execute BigQuery query"""
@@ -148,7 +206,7 @@ class DataMigrationManager:
         return comparison
     
     def get_data_counts(self) -> Dict:
-        """Get record counts using bq CLI"""
+        """Get record counts using BigQuery client with proper error handling"""
         self.logger.info("📊 Getting data counts")
         
         counts = {}
@@ -159,23 +217,40 @@ class DataMigrationManager:
             
             for table in tables:
                 try:
-                    cmd = f'bq query --nouse_legacy_sql --format=csv --quiet "SELECT COUNT(*) as count FROM `{self.project_id}.{dataset}.{table}`"'
-                    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=False)
+                    # Check if table exists first
+                    table_ref = f"{self.project_id}.{dataset}.{table}"
                     
-                    if result.returncode == 0:
-                        lines = result.stdout.strip().split('\n')
-                        if len(lines) >= 2:  # Header + data
-                            count_str = lines[1].strip()
-                            counts[env][table] = int(count_str) if count_str.isdigit() else count_str
+                    try:
+                        # Try to get table metadata first
+                        table_obj = self.client.get_table(table_ref)
+                        
+                        # If we can access metadata, try to count
+                        count_query = f"SELECT COUNT(*) as count FROM `{table_ref}`"
+                        result = self.run_query(count_query)
+                        
+                        if result:
+                            for row in result:
+                                counts[env][table] = row.count
+                                break
                         else:
-                            counts[env][table] = 0
-                    else:
-                        if "Not found" in result.stderr or "does not exist" in result.stderr:
+                            counts[env][table] = "Query failed"
+                            
+                    except NotFound:
+                        counts[env][table] = "N/A"
+                    except Exception as access_error:
+                        # Check if it's a permission error
+                        error_msg = str(access_error)
+                        if "Access Denied" in error_msg or "permission" in error_msg.lower():
+                            counts[env][table] = "No access"
+                        elif "does not exist" in error_msg:
                             counts[env][table] = "N/A"
                         else:
-                            counts[env][table] = f"Error"
+                            counts[env][table] = "Error"
+                            self.logger.debug(f"Table {table} in {env}: {error_msg}")
+                            
                 except Exception as e:
-                    counts[env][table] = f"Error: {str(e)[:50]}"
+                    counts[env][table] = "Error"
+                    self.logger.debug(f"Unexpected error for {table} in {env}: {str(e)[:100]}")
         
         return counts
     
@@ -231,7 +306,7 @@ class DataMigrationManager:
             return False
     
     def migrate_prod_to_staging(self, dry_run: bool = True) -> bool:
-        """Migrate production data to staging with correct timestamp"""
+        """Migrate production data to staging with correct timestamp and schema conversion"""
         self.logger.info(f"🚀 Starting prod to staging migration (dry_run={dry_run})")
         
         if not dry_run:
@@ -245,6 +320,16 @@ class DataMigrationManager:
         
         for table in tables_to_migrate:
             self.logger.info(f"📦 Migrating {table}")
+            
+            # Check for schema compatibility and log issues
+            schema_comparison = self.compare_schemas(table)
+            if not schema_comparison['compatible']:
+                self.logger.warning(f"⚠️  Schema mismatch detected for {table}:")
+                for diff in schema_comparison['differences']:
+                    if 'type mismatch' in diff:
+                        self.logger.warning(f"  🔄 {diff} - Will apply auto-conversion")
+                    else:
+                        self.logger.info(f"  ℹ️  {diff}")
             
             # Get source data count
             count_query = f"SELECT COUNT(*) as count FROM `{self.project_id}.Hubspot_prod.{table}`"
@@ -273,14 +358,8 @@ class DataMigrationManager:
                     continue
                 self.logger.info(f"🗑️  Cleared existing data in staging.{table}")
             
-            # Migration query - add snapshot_id and preserve all other fields
-            migration_query = f"""
-            INSERT INTO `{self.project_id}.Hubspot_staging.{table}` 
-            SELECT 
-                *,
-                '{self.migration_snapshot_id}' as snapshot_id
-            FROM `{self.project_id}.Hubspot_prod.{table}`
-            """
+            # Build migration query with schema-aware field handling
+            migration_query = self._build_migration_query(table, schema_comparison)
             
             # Execute migration
             if dry_run:
@@ -317,7 +396,210 @@ class DataMigrationManager:
         else:
             self.logger.error(f"❌ Migration partially failed: {success_count}/{len(tables_to_migrate)} tables")
         
-        return migration_success
+    def _build_migration_query(self, table: str, schema_comparison: Dict) -> str:
+        """Build migration query with schema-aware field conversions"""
+        
+        # Get actual field names from production and staging
+        prod_schema = schema_comparison['schemas'].get('prod', [])
+        staging_schema = schema_comparison['schemas'].get('staging', [])
+        
+        prod_fields = [f['name'] for f in prod_schema] if prod_schema else []
+        staging_fields = [f['name'] for f in staging_schema] if staging_schema else []
+        
+        self.logger.info(f"🔍 Production fields ({len(prod_fields)}): {prod_fields}")
+        self.logger.info(f"🔍 Staging fields ({len(staging_fields)}): {staging_fields}")
+        
+        if table == 'hs_deals':
+            # Special handling for hs_deals with type conversions
+            self.logger.info("🔄 Building schema-aware migration query for hs_deals")
+            
+            # Build exact field mapping to match staging schema
+            select_fields = []
+            
+            # Map each staging field to production or create it
+            for staging_field in staging_fields:
+                if staging_field == 'snapshot_id':
+                    select_fields.append(f"'{self.migration_snapshot_id}' as snapshot_id")
+                elif staging_field == 'timestamp' and 'timestamp' not in prod_fields:
+                    select_fields.append('CURRENT_TIMESTAMP() as timestamp')
+                elif staging_field == 'amount' and 'amount' in prod_fields:
+                    # Convert STRING to FLOAT
+                    select_fields.append('SAFE_CAST(amount AS FLOAT64) as amount')
+                elif staging_field in prod_fields:
+                    # Direct mapping
+                    select_fields.append(staging_field)
+                else:
+                    # Field missing in production - try alternatives or NULL
+                    if staging_field == 'closedate':
+                        if 'close_date' in prod_fields:
+                            select_fields.append('close_date as closedate')
+                        else:
+                            select_fields.append('NULL as closedate')
+                    elif staging_field == 'createdate':
+                        if 'create_date' in prod_fields:
+                            select_fields.append('create_date as createdate')
+                        else:
+                            select_fields.append('NULL as createdate')
+                    else:
+                        select_fields.append(f'NULL as {staging_field}')
+            
+            self.logger.info(f"📋 Select fields ({len(select_fields)}): {select_fields}")
+            
+            query = f"""
+            INSERT INTO `{self.project_id}.Hubspot_staging.{table}` 
+            SELECT 
+                {', '.join(select_fields)}
+            FROM `{self.project_id}.Hubspot_prod.{table}`
+            """
+            
+            self.logger.info("✅ Applied field conversions and mappings")
+            
+        elif table == 'hs_companies':
+            # Handle companies with exact field mapping
+            self.logger.info("🔄 Building schema-aware migration query for hs_companies")
+            
+            select_fields = []
+            
+            # Map each staging field to production or create it
+            for staging_field in staging_fields:
+                if staging_field == 'snapshot_id':
+                    select_fields.append(f"'{self.migration_snapshot_id}' as snapshot_id")
+                elif staging_field == 'timestamp' and 'timestamp' not in prod_fields:
+                    select_fields.append('CURRENT_TIMESTAMP() as timestamp')
+                elif staging_field in prod_fields:
+                    # Direct mapping
+                    select_fields.append(staging_field)
+                else:
+                    # Field missing in production
+                    select_fields.append(f'NULL as {staging_field}')
+            
+            self.logger.info(f"📋 Select fields ({len(select_fields)}): {select_fields}")
+            
+            query = f"""
+            INSERT INTO `{self.project_id}.Hubspot_staging.{table}` 
+            SELECT 
+                {', '.join(select_fields)}
+            FROM `{self.project_id}.Hubspot_prod.{table}`
+            """
+            
+            self.logger.info("✅ Built exact field mapping")
+            
+        else:
+            # Default migration for other tables
+            self.logger.warning(f"⚠️  Using default migration for {table} - manual review may be needed")
+            query = f"""
+            INSERT INTO `{self.project_id}.Hubspot_staging.{table}` 
+            SELECT 
+                *,
+                '{self.migration_snapshot_id}' as snapshot_id
+            FROM `{self.project_id}.Hubspot_prod.{table}`
+            """
+        
+        return query
+    
+    def check_prod_snapshot_format(self) -> Dict:
+        """Check snapshot_id format in production data with proper error handling"""
+        self.logger.info("🔍 Checking production snapshot_id formats")
+        
+        format_analysis = {}
+        
+        # Check companies table
+        try:
+            table_ref = f"{self.project_id}.Hubspot_prod.hs_companies"
+            
+            # First check if we have access to the table
+            try:
+                self.client.get_table(table_ref)
+            except NotFound:
+                self.logger.warning("Production companies table not found")
+                format_analysis['hs_companies'] = "Table not found"
+                return format_analysis
+            except Exception as access_error:
+                if "Access Denied" in str(access_error) or "permission" in str(access_error).lower():
+                    self.logger.warning("No access to production companies table")
+                    format_analysis['hs_companies'] = "No access"
+                    format_analysis['hs_deals'] = "No access" 
+                    return format_analysis
+                else:
+                    raise
+            
+            query = f"""
+            SELECT 
+                snapshot_id,
+                COUNT(*) as record_count
+            FROM `{table_ref}`
+            GROUP BY snapshot_id
+            ORDER BY record_count DESC
+            LIMIT 5
+            """
+            
+            result = self.run_query(query)
+            if result:
+                format_analysis['hs_companies'] = []
+                for row in result:
+                    snapshot_format = self._analyze_snapshot_format(row.snapshot_id)
+                    format_analysis['hs_companies'].append({
+                        'snapshot_id': row.snapshot_id,
+                        'count': row.record_count,
+                        'format': snapshot_format
+                    })
+                    
+        except Exception as e:
+            self.logger.warning(f"Could not analyze companies snapshot format: {str(e)[:100]}")
+            format_analysis['hs_companies'] = f"Error: {str(e)[:50]}"
+        
+        # Check deals table  
+        try:
+            table_ref = f"{self.project_id}.Hubspot_prod.hs_deals"
+            
+            query = f"""
+            SELECT 
+                snapshot_id,
+                COUNT(*) as record_count
+            FROM `{table_ref}`
+            GROUP BY snapshot_id
+            ORDER BY record_count DESC
+            LIMIT 5
+            """
+            
+            result = self.run_query(query)
+            if result:
+                format_analysis['hs_deals'] = []
+                for row in result:
+                    snapshot_format = self._analyze_snapshot_format(row.snapshot_id)
+                    format_analysis['hs_deals'].append({
+                        'snapshot_id': row.snapshot_id,
+                        'count': row.record_count,
+                        'format': snapshot_format
+                    })
+                    
+        except Exception as e:
+            self.logger.warning(f"Could not analyze deals snapshot format: {str(e)[:100]}")
+            format_analysis['hs_deals'] = f"Error: {str(e)[:50]}"
+        
+        return format_analysis
+    
+    def _analyze_snapshot_format(self, snapshot_id: str) -> Dict:
+        """Analyze the format of a snapshot_id"""
+        analysis = {
+            'has_microseconds': '.000000' in snapshot_id or '.' in snapshot_id,
+            'has_timezone': snapshot_id.endswith('Z') or '+' in snapshot_id or snapshot_id.endswith('UTC'),
+            'length': len(snapshot_id),
+            'format_type': 'unknown'
+        }
+        
+        if len(snapshot_id) == 10:  # YYYY-MM-DD
+            analysis['format_type'] = 'date_only'
+        elif len(snapshot_id) == 19:  # YYYY-MM-DDTHH:MM:SS
+            analysis['format_type'] = 'datetime_no_tz'
+        elif len(snapshot_id) == 20 and snapshot_id.endswith('Z'):  # YYYY-MM-DDTHH:MM:SSZ
+            analysis['format_type'] = 'datetime_utc'
+        elif len(snapshot_id) == 27 and snapshot_id.endswith('Z'):  # YYYY-MM-DDTHH:MM:SS.FFFFFFZ
+            analysis['format_type'] = 'datetime_microseconds_utc'
+        else:
+            analysis['format_type'] = 'custom'
+        
+        return analysis
     
     def copy_reference_data_from_dev(self, dry_run: bool = True) -> bool:
         """Copy reference data from dev to staging"""
@@ -427,23 +709,51 @@ class DataMigrationManager:
             print(f"{'='*70}")
             print(f"Project: {self.project_id}")
             print(f"Migration Timestamp: {self.prod_snapshot_timestamp}")
+            
+            # Display authentication info
+            if self.auth_info:
+                print(f"{'='*70}")
+                print(f"🔐 AUTHENTICATION INFO")
+                
+                if self.auth_info.get('using_service_account'):
+                    print(f"👤 BigQuery User: {self.auth_info.get('bigquery_user', 'Unknown')} (Service Account)")
+                    if self.auth_info.get('env_var_set'):
+                        env_path = self.auth_info.get('env_var_path', '')
+                        filename = env_path.split('/')[-1] if env_path else ''
+                        print(f"🔑 Credentials: Environment variable ({filename})")
+                        
+                        # Warning for service account access
+                        if 'dev' in filename.lower():
+                            print(f"⚠️  WARNING: Using dev service account - may lack prod access!")
+                        
+                else:
+                    print(f"👤 BigQuery User: {self.auth_info.get('bigquery_user', 'Unknown')} (User Account)")
+                    print(f"🔑 Credentials: User authentication")
+                
+                print(f"🌐 gcloud User: {self.auth_info.get('gcloud_user', 'Unknown')}")
+                print(f"🔧 Credentials Type: {self.auth_info.get('credentials_type', 'Unknown')}")
+                
+                if self.auth_info.get('error'):
+                    print(f"❌ Auth Error: {self.auth_info['error']}")
+            
             print(f"{'='*70}")
             
             print(f"\n📋 OPERATIONS")
             print(f"  1) 🔍 Compare Schemas")
             print(f"  2) 📊 Show Data Counts")
-            print(f"  3) 🧪 Test Migration (Dry Run)")
-            print(f"  4) 🚀 Execute Migration (LIVE)")
-            print(f"  5) 📋 Copy Reference Data (Dry Run)")
-            print(f"  6) 📋 Copy Reference Data (LIVE)")
-            print(f"  7) 📝 Create Registry Entry (Dry Run)")
-            print(f"  8) 📝 Create Registry Entry (LIVE)")
-            print(f"  9) 🎯 Full Migration Pipeline (Dry Run)")
-            print(f"  10) 🎯 Full Migration Pipeline (LIVE)")
+            print(f"  3) 🔍 Check Prod Snapshot Formats")
+            print(f"  4) 🧪 Test Migration (Dry Run)")
+            print(f"  5) 🚀 Execute Migration (LIVE)")
+            print(f"  6) 📋 Copy Reference Data (Dry Run)")
+            print(f"  7) 📋 Copy Reference Data (LIVE)")
+            print(f"  8) 📝 Create Registry Entry (Dry Run)")
+            print(f"  9) 📝 Create Registry Entry (LIVE)")
+            print(f"  10) 🎯 Full Migration Pipeline (Dry Run)")
+            print(f"  11) 🎯 Full Migration Pipeline (LIVE)")
             print(f"  0) ❌ Exit")
             
             try:
-                choice = input(f"\n🔹 Enter choice (0-10): ").strip()
+                choice = input(f"\n🔹 Enter choice (0-11): ").strip()
                 
                 if choice == '0':
                     print("\n👋 Goodbye!")
@@ -453,27 +763,29 @@ class DataMigrationManager:
                 elif choice == '2':
                     self.show_data_counts()
                 elif choice == '3':
-                    self.migrate_prod_to_staging(dry_run=True)
+                    self.show_prod_snapshot_formats()
                 elif choice == '4':
+                    self.migrate_prod_to_staging(dry_run=True)
+                elif choice == '5':
                     if self.confirm_live_migration():
                         self.migrate_prod_to_staging(dry_run=False)
-                elif choice == '5':
-                    self.copy_reference_data_from_dev(dry_run=True)
                 elif choice == '6':
+                    self.copy_reference_data_from_dev(dry_run=True)
+                elif choice == '7':
                     if self.confirm_live_operation("copy reference data"):
                         self.copy_reference_data_from_dev(dry_run=False)
-                elif choice == '7':
-                    self.create_snapshot_registry_entry(dry_run=True)
                 elif choice == '8':
+                    self.create_snapshot_registry_entry(dry_run=True)
+                elif choice == '9':
                     if self.confirm_live_operation("create registry entry"):
                         self.create_snapshot_registry_entry(dry_run=False)
-                elif choice == '9':
-                    self.full_migration_pipeline(dry_run=True)
                 elif choice == '10':
+                    self.full_migration_pipeline(dry_run=True)
+                elif choice == '11':
                     if self.confirm_full_migration():
                         self.full_migration_pipeline(dry_run=False)
                 else:
-                    print("❌ Invalid choice. Please select 0-10.")
+                    print("❌ Invalid choice. Please select 0-11.")
                     
             except KeyboardInterrupt:
                 print("\n\n👋 Goodbye!")
@@ -530,6 +842,61 @@ class DataMigrationManager:
             prod_count = counts.get('prod', {}).get(table, 'N/A')
             
             print(f"{table:<25} {str(dev_count):<10} {str(staging_count):<10} {str(prod_count):<10}")
+    
+    def show_prod_snapshot_formats(self):
+        """Show production snapshot_id formats with better error handling"""
+        print(f"\n🔍 PRODUCTION SNAPSHOT FORMATS")
+        print("=" * 50)
+        
+        format_analysis = self.check_prod_snapshot_format()
+        
+        if not format_analysis:
+            print("❌ No data available for analysis")
+            return
+        
+        for table, snapshots in format_analysis.items():
+            print(f"\n📋 {table.upper()}")
+            print("-" * 30)
+            
+            if isinstance(snapshots, str):
+                # Error message
+                if "No access" in snapshots:
+                    print(f"  🔒 {snapshots} - You may need production read permissions")
+                    print(f"  💡 Contact admin to grant BigQuery Data Viewer role for prod dataset")
+                elif "Error" in snapshots:
+                    print(f"  ❌ {snapshots}")
+                else:
+                    print(f"  ℹ️  {snapshots}")
+            elif isinstance(snapshots, list):
+                # Actual snapshot data
+                for snapshot_info in snapshots:
+                    snapshot_id = snapshot_info['snapshot_id']
+                    count = snapshot_info['count']
+                    format_info = snapshot_info['format']
+                    
+                    print(f"  📸 {snapshot_id}")
+                    print(f"      Records: {count:,}")
+                    print(f"      Format: {format_info['format_type']}")
+                    print(f"      Length: {format_info['length']} chars")
+                    print(f"      Microseconds: {'✅' if format_info['has_microseconds'] else '❌'}")
+                    print(f"      Timezone: {'✅' if format_info['has_timezone'] else '❌'}")
+                    
+                    if format_info['format_type'] != 'datetime_microseconds_utc':
+                        print(f"      ⚠️  Old format - migration will update to: {self.migration_snapshot_id}")
+                    print()
+            else:
+                print(f"  ❌ Unexpected data format")
+        
+        print(f"💡 Migration will standardize all data to: {self.migration_snapshot_id}")
+        print(f"💡 This preserves the original timestamp but adds microseconds + timezone")
+        
+        # Check if we have production access issues
+        if any("No access" in str(v) for v in format_analysis.values()):
+            print(f"\n🔒 PRODUCTION ACCESS REQUIRED")
+            print(f"To use this migration tool, you need:")
+            print(f"  • BigQuery Data Viewer role on Hubspot_prod dataset")
+            print(f"  • Or copy the migration queries and run them with proper access")
+            print(f"  • Contact your GCP admin to grant these permissions")
     
     def confirm_live_migration(self) -> bool:
         """Confirm live migration operation"""
