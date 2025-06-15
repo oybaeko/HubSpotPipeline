@@ -1,14 +1,10 @@
-# src/hubspot_pipeline/excel_import/schema.py
-"""
-Schema definitions for Excel import module.
-Separate from main schema.py to avoid affecting GCF deployments.
-Updated to match the actual sheet names in your cleaned Excel file.
-"""
+# File: build-staging/first_stage_data/excel_import/schema.py
+# UPDATED VERSION - Fix timestamp field name to match pipeline schema
 
 from typing import List, Tuple, Dict
 
 # ─────────────────────────────────────────────────────────────────────────────────
-#   Companies Schema for Excel Import (matches main hs_companies) - REMOVED TIMESTAMP
+#   Companies Schema for Excel Import - FIXED to use record_timestamp
 # ─────────────────────────────────────────────────────────────────────────────────
 
 EXCEL_COMPANIES_SCHEMA: List[Tuple[str, str]] = [
@@ -26,11 +22,11 @@ EXCEL_COMPANIES_SCHEMA: List[Tuple[str, str]] = [
     ("proff_lonnsomhet",       "STRING"),
     ("proff_soliditet",        "STRING"),
     ("snapshot_id",            "STRING"),
-    # REMOVED: ("timestamp", "TIMESTAMP"),
+    ("record_timestamp",       "TIMESTAMP"),  # ✅ FIXED: Changed from "timestamp"
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────────
-#   Deals Schema for Excel Import (matches main hs_deals) - REMOVED TIMESTAMP
+#   Deals Schema for Excel Import - FIXED to use record_timestamp
 # ─────────────────────────────────────────────────────────────────────────────────
 
 EXCEL_DEALS_SCHEMA: List[Tuple[str, str]] = [
@@ -42,11 +38,11 @@ EXCEL_DEALS_SCHEMA: List[Tuple[str, str]] = [
     ("owner_id",              "STRING"),
     ("associated_company_id", "STRING"),
     ("snapshot_id",           "STRING"),
-    # REMOVED: ("timestamp", "TIMESTAMP"),
+    ("record_timestamp",      "TIMESTAMP"),  # ✅ FIXED: Changed from "timestamp"
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────────
-#   Owners Schema for Excel Import - REMOVED TIMESTAMP
+#   Owners Schema for Excel Import - FIXED to use record_timestamp
 # ─────────────────────────────────────────────────────────────────────────────────
 
 EXCEL_OWNERS_SCHEMA: List[Tuple[str, str]] = [
@@ -56,18 +52,17 @@ EXCEL_OWNERS_SCHEMA: List[Tuple[str, str]] = [
     ("last_name",     "STRING"),
     ("user_id",       "STRING"),
     ("active",        "STRING"),
-    # REMOVED: ("timestamp", "TIMESTAMP"),
+    ("record_timestamp", "TIMESTAMP"),  # ✅ FIXED: Changed from "timestamp"
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────────
-#   Excel Column Mappings - REMOVED TIMESTAMP MAPPINGS
+#   Excel Column Mappings - No changes needed here
 # ─────────────────────────────────────────────────────────────────────────────────
 
 EXCEL_COMPANY_FIELD_MAP: Dict[str, str] = {
     "Record ID": "company_id",
     "Company name": "company_name",
     "Company owner": "hubspot_owner_id",
-    # REMOVED: "Create Date": "timestamp",
     "Type": "company_type",
     "Lifecycle Stage": "lifecycle_stage",
     "Lead Status": "lead_status",
@@ -83,7 +78,6 @@ EXCEL_DEAL_FIELD_MAP: Dict[str, str] = {
     "Amount": "amount",
     "Deal owner": "owner_id",
     "Associated company ID": "associated_company_id",
-    # REMOVED: "Create date": "timestamp",
     # Common variations
     "Dealname": "deal_name",
     "Dealstage": "deal_stage",
@@ -98,11 +92,10 @@ EXCEL_OWNERS_FIELD_MAP: Dict[str, str] = {
     "last_name": "last_name",
     "user_id": "user_id",
     "active": "active",
-    # REMOVED: "timestamp": "timestamp",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────
-#   Snapshot Configuration - Updated with your actual sheet names
+#   Snapshot Configuration - No changes needed
 # ─────────────────────────────────────────────────────────────────────────────────
 
 SNAPSHOTS_TO_IMPORT = [
@@ -158,12 +151,8 @@ SNAPSHOTS_TO_IMPORT = [
     }
 ]
 
-# Note: I didn't include these because they don't appear in your original list:
-# - 2025-03-12: company-2025-03-12, deals-2025-03-12  
-# - 2025-03-30: company-2025-03-30, deals-2025-03-30
-
 # ─────────────────────────────────────────────────────────────────────────────────
-#   Owners Lookup Data (based on your table)
+#   Owners Lookup Data - No changes needed
 # ─────────────────────────────────────────────────────────────────────────────────
 
 OWNERS_LOOKUP = {
@@ -192,7 +181,7 @@ OWNERS_LOOKUP = {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────
-#   Table Mappings
+#   Table Mappings - No changes needed
 # ─────────────────────────────────────────────────────────────────────────────────
 
 TABLE_SCHEMAS = {

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Main Migration Orchestrator - COMPLETE VERSION
-Includes Excel import integration for historical data
-4-Step Process: Clean → Create → Migrate → Import Historical
+Main Migration Orchestrator - UPDATED VERSION
+Simplified to use simple_table_creator.py for table operations
+3-Step Process: Create Tables → Migrate → Import Historical
 """
 
 import sys
@@ -30,7 +30,7 @@ except ImportError:
     BIGQUERY_AVAILABLE = False
 
 class MainMigrationOrchestrator:
-    """Complete staging setup and data migration with Excel import"""
+    """Simplified migration orchestration using simple_table_creator"""
     
     def __init__(self):
         self.project_id = "hubspot-452402"
@@ -48,10 +48,12 @@ class MainMigrationOrchestrator:
             
         # Get authentication info
         self.auth_info = self._get_auth_info()
-            
-        # Migration steps status - COMPLETE 4-step process
+        
+        # Path to simple table creator
+        self.table_creator_script = Path(__file__).parent / "simple_table_creator.py"
+        
+        # Migration steps status - SIMPLIFIED 3-step process
         self.steps_completed = {
-            'clean_dataset': False,
             'create_tables': False,
             'migrate_data': False,
             'import_excel': False
@@ -62,7 +64,7 @@ class MainMigrationOrchestrator:
         auth_info = {
             'bigquery_user': 'Unknown',
             'gcloud_user': 'Unknown',
-            'current_env': 'Unknown'
+            'current_env': 'staging'
         }
         
         try:
@@ -83,9 +85,6 @@ class MainMigrationOrchestrator:
             else:
                 auth_info['bigquery_user'] = auth_info['gcloud_user']
             
-            # Determine current environment based on which dataset we're targeting
-            auth_info['current_env'] = 'staging'
-            
         except Exception as e:
             auth_info['error'] = str(e)
         
@@ -98,243 +97,134 @@ class MainMigrationOrchestrator:
         self.logger.info(f"🌍 Target Environment: staging ({self.staging_dataset})")
         self.logger.info(f"📂 Target Dataset: {self.project_id}.{self.staging_dataset}")
     
-    def run_command(self, cmd: str, description: str = "") -> bool:
-        """Run shell command and return success status"""
-        if description:
-            self.logger.info(f"🔧 {description}")
+    def run_python_script(self, script_path: str, args: List[str] = None) -> bool:
+        """Run a Python script and return success status"""
+        if args is None:
+            args = []
+        
+        cmd = [sys.executable, str(script_path)] + args
         
         try:
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            
+            # Log output
             if result.stdout.strip():
-                self.logger.debug(f"Output: {result.stdout.strip()}")
+                for line in result.stdout.strip().split('\n'):
+                    self.logger.info(f"  {line}")
+            
             return True
+            
         except subprocess.CalledProcessError as e:
-            self.logger.error(f"❌ Command failed: {cmd}")
+            self.logger.error(f"❌ Script failed: {script_path}")
+            self.logger.error(f"Exit code: {e.returncode}")
             if e.stdout:
                 self.logger.error(f"Stdout: {e.stdout}")
             if e.stderr:
                 self.logger.error(f"Stderr: {e.stderr}")
             return False
-    
-    def step_1_clean_staging_dataset(self) -> bool:
-        """Step 1: Clean staging dataset - remove all tables"""
-        self.logger.info("🗑️  STEP 1: Cleaning staging dataset")
-        
-        try:
-            # List all tables in staging dataset
-            dataset_ref = self.client.dataset(self.staging_dataset)
-            tables = list(self.client.list_tables(dataset_ref))
-            
-            if not tables:
-                self.logger.info("✅ Staging dataset is already clean (no tables)")
-                self.steps_completed['clean_dataset'] = True
-                return True
-            
-            self.logger.info(f"📋 Found {len(tables)} tables to delete:")
-            for table in tables:
-                self.logger.info(f"  • {table.table_id}")
-            
-            # Confirm deletion
-            print(f"\n⚠️  This will DELETE {len(tables)} tables from staging!")
-            confirm = input("Type 'DELETE TABLES' to confirm: ").strip()
-            
-            if confirm != 'DELETE TABLES':
-                self.logger.info("❌ Operation cancelled")
-                return False
-            
-            # Delete all tables
-            deleted_count = 0
-            for table in tables:
-                try:
-                    self.client.delete_table(table, not_found_ok=True)
-                    self.logger.info(f"🗑️  Deleted {table.table_id}")
-                    deleted_count += 1
-                except Exception as e:
-                    self.logger.error(f"❌ Failed to delete {table.table_id}: {e}")
-            
-            self.logger.info(f"✅ Deleted {deleted_count}/{len(tables)} tables")
-            self.steps_completed['clean_dataset'] = deleted_count == len(tables)
-            return self.steps_completed['clean_dataset']
-            
-        except NotFound:
-            self.logger.warning(f"⚠️  Dataset {self.staging_dataset} does not exist")
-            return False
         except Exception as e:
-            self.logger.error(f"❌ Failed to clean dataset: {e}")
+            self.logger.error(f"❌ Failed to run script: {e}")
             return False
     
-    def step_2_create_tables_via_e2e_test(self) -> bool:
-        """Step 2: Create tables by calling staging cloud function E2E test"""
-        self.logger.info("🏗️  STEP 2: Creating tables via staging cloud function")
-        self.logger.info("🎯 Calling staging E2E test to create table structure")
+    def step_1_create_tables_via_simple_creator(self) -> bool:
+        """Step 1: Create tables using simple_table_creator.py"""
+        self.logger.info("🏗️  STEP 1: Creating tables using simple table creator")
+        
+        if not self.table_creator_script.exists():
+            self.logger.error(f"❌ Table creator script not found: {self.table_creator_script}")
+            self.logger.error("💡 Make sure simple_table_creator.py exists in build-staging/")
+            return False
         
         try:
-            import subprocess
-            import json
-            import tempfile
+            # Import the simple table creator to use programmatically
+            sys.path.insert(0, str(self.table_creator_script.parent))
+            from simple_table_creator import SimpleTableCreator
             
-            # Staging cloud function URL
-            staging_url = "https://europe-west1-hubspot-452402.cloudfunctions.net/hubspot-ingest-staging"
+            self.logger.info("🔧 Initializing simple table creator...")
+            creator = SimpleTableCreator()
+            creator.environment = 'staging'  # Force staging environment
+            creator.dataset = creator.environments['staging']
             
-            # Create payload for E2E test with small limit
-            payload = {
-                "mode": "test",
-                "test_type": "integration", 
-                "record_limit": 1,  # Very small limit just for table creation
-                "trigger_source": "migration_orchestrator_table_creation"
-            }
+            self.logger.info(f"🎯 Target: {creator.environment} ({creator.dataset})")
             
-            # Create temporary files for response and error output
-            with tempfile.NamedTemporaryFile(mode='w+', suffix='.json', delete=False) as temp_file:
-                temp_file_path = temp_file.name
+            # Check if tables already exist
+            self.logger.info("🔍 Checking existing tables...")
+            creator.check_tables()
             
-            self.logger.info(f"🚀 Calling staging cloud function...")
-            self.logger.info(f"📡 URL: {staging_url}")
-            self.logger.info(f"📦 Payload: {json.dumps(payload, indent=2)}")
+            # Ask user what to do
+            print(f"\n🏗️  TABLE CREATION OPTIONS")
+            print(f"1) Create missing tables only")
+            print(f"2) Recreate all tables (DELETE + CREATE)")
+            print(f"3) Skip table creation")
             
-            # Execute curl command
-            curl_cmd = [
-                'curl', '-X', 'POST', staging_url,
-                '-H', 'Content-Type: application/json',
-                '-d', json.dumps(payload),
-                '-o', temp_file_path,
-                '-w', 'HTTP:%{http_code} Time:%{time_total}s Size:%{size_download}bytes',
-                '--max-time', '300',  # 5 minute timeout
-                '--connect-timeout', '30'
-            ]
-            
-            result = subprocess.run(curl_cmd, capture_output=True, text=True, timeout=320)
-            
-            self.logger.info(f"📊 Curl metrics: {result.stdout}")
-            
-            # Read response content
-            response_content = ""
-            try:
-                with open(temp_file_path, 'r') as f:
-                    response_content = f.read()
-                self.logger.info(f"📄 Response size: {len(response_content)} characters")
-                os.unlink(temp_file_path)  # Clean up temp file
-            except Exception as e:
-                self.logger.error(f"❌ Failed to read response file: {e}")
-                return False
-            
-            # Try to parse as JSON
-            try:
-                if response_content.strip():
-                    response_data = json.loads(response_content)
-                    self.logger.info(f"✅ Successfully parsed JSON response")
+            while True:
+                choice = input("\nChoose option (1-3): ").strip()
+                
+                if choice == '1':
+                    recreate = False
+                    break
+                elif choice == '2':
+                    print(f"\n⚠️  RECREATE ALL TABLES WARNING")
+                    print(f"This will DELETE existing tables in staging!")
+                    confirm = input("Type 'RECREATE TABLES' to confirm: ")
+                    if confirm == 'RECREATE TABLES':
+                        recreate = True
+                        break
+                    else:
+                        self.logger.info("❌ Operation cancelled")
+                        return False
+                elif choice == '3':
+                    self.logger.info("⏭️  Skipping table creation")
+                    self.steps_completed['create_tables'] = True
+                    return True
                 else:
-                    self.logger.error("❌ Empty response content")
-                    return False
-            except json.JSONDecodeError as e:
-                self.logger.error(f"❌ Failed to parse JSON response: {e}")
-                return False
+                    print("❌ Invalid choice")
             
-            # Check HTTP status from metrics
-            if 'HTTP:200' in result.stdout or 'HTTP:206' in result.stdout:
-                self.logger.info("✅ HTTP Success")
-            else:
-                self.logger.error(f"❌ Non-success HTTP status")
-                return False
+            # Create tables
+            self.logger.info(f"🚀 Creating core tables (recreate={recreate})...")
+            success = creator.create_all_core_tables(recreate=recreate)
             
-            # Analyze response structure
-            if response_data.get('test_mode') == True:
-                return self._handle_test_framework_response(response_data)
-            elif 'status' in response_data:
-                return self._handle_functional_response(response_data)
-            else:
-                self.logger.error(f"❌ Unknown response format")
-                return False
-                
-        except subprocess.TimeoutExpired:
-            self.logger.error("❌ Cloud function call timed out (5+ minutes)")
-            return False
-        except Exception as e:
-            self.logger.error(f"❌ Failed to call cloud function: {e}")
-            return False
-    
-    def _handle_test_framework_response(self, response_data: Dict) -> bool:
-        """Handle test framework response"""
-        status = response_data.get('status', 'unknown')
-        summary = response_data.get('summary', {})
-        
-        self.logger.info(f"🧪 Test framework status: {status}")
-        self.logger.info(f"📊 Test summary: {summary}")
-        
-        if status in ['success', 'partial_success']:
-            passed = summary.get('passed', 0)
-            total = summary.get('total', 0)
-            self.logger.info(f"✅ E2E test passed: {passed}/{total} tests")
-            
-            # Verify tables were created in staging
-            if self._verify_staging_tables():
+            if success:
+                self.logger.info("✅ Table creation completed successfully")
                 self.steps_completed['create_tables'] = True
                 return True
             else:
-                self.logger.warning("⚠️ Test passed but no tables found in staging")
-                return False
-        else:
-            error = response_data.get('error', 'Unknown error')
-            self.logger.error(f"❌ E2E test failed: {error}")
-            return False
-    
-    def _handle_functional_response(self, response_data: Dict) -> bool:
-        """Handle functional pipeline response"""
-        status = response_data.get('status', 'unknown')
-        
-        self.logger.info(f"⚙️ Pipeline status: {status}")
-        
-        if status == 'success':
-            total_records = response_data.get('total_records', 0)
-            snapshot_id = response_data.get('snapshot_id', 'N/A')
-            
-            self.logger.info(f"✅ Pipeline completed: {total_records} records, snapshot: {snapshot_id}")
-            
-            # Verify tables were created in staging
-            if self._verify_staging_tables():
-                self.steps_completed['create_tables'] = True
-                return True
-            else:
-                self.logger.warning("⚠️ Pipeline succeeded but no tables found in staging")
-                return False
-        else:
-            error = response_data.get('error', 'Unknown error')
-            self.logger.error(f"❌ Pipeline failed: {error}")
-            return False
-    
-    def _verify_staging_tables(self):
-        """Verify that tables were created in staging dataset"""
-        try:
-            dataset_ref = self.client.dataset(self.staging_dataset)
-            tables = list(self.client.list_tables(dataset_ref))
-            
-            if tables:
-                self.logger.info(f"✅ Verified: {len(tables)} tables created in staging:")
-                for table in tables:
-                    self.logger.info(f"  • {table.table_id}")
-                return True
-            else:
-                self.logger.warning("⚠️  No tables found in staging after pipeline execution")
+                self.logger.error("❌ Table creation failed")
                 return False
                 
+        except ImportError as e:
+            self.logger.error(f"❌ Failed to import simple_table_creator: {e}")
+            return False
         except Exception as e:
-            self.logger.warning(f"⚠️  Could not verify staging tables: {e}")
+            self.logger.error(f"❌ Table creation failed: {e}")
             return False
     
-    def step_3_migrate_prod_to_staging(self) -> bool:
-        """Step 3: Migrate ONLY companies and deals from prod to staging (includes table clearing)"""
-        self.logger.info("🚀 STEP 3: Migrating data from production to staging")
+    def step_2_migrate_prod_to_staging(self) -> bool:
+        """Step 2: Migrate ONLY companies and deals from prod to staging"""
+        self.logger.info("🚀 STEP 2: Migrating data from production to staging")
         self.logger.info("📊 This will migrate ONLY companies and deals")
         self.logger.info("🧹 Migration includes automatic table clearing")
         
         try:
-            from data_migration_script import DataMigrationManager
+            # Import migration components directly from build-staging/migration/
+            migration_dir = Path(__file__).parent / "migration"
+            if not migration_dir.exists():
+                self.logger.error(f"❌ Migration directory not found: {migration_dir}")
+                self.logger.error(f"💡 Expected path: {migration_dir}")
+                return False
             
-            migration_manager = DataMigrationManager()
+            # Add migration directory to path
+            sys.path.insert(0, str(Path(__file__).parent))
             
-            # Migration automatically clears tables before inserting data
+            # Import the data migrator
+            from migration.data_migrator import DataMigrator
+            
+            # Create data migrator
+            data_migrator = DataMigrator()
+            
+            # Run migration
             self.logger.info("🎯 Running data migration (companies + deals with auto-clear)...")
-            success = migration_manager.migrate_prod_to_staging(dry_run=False)
+            success = data_migrator.migrate_prod_to_staging(dry_run=False)
             
             if success:
                 self.logger.info("✅ Production data migrated successfully")
@@ -347,15 +237,23 @@ class MainMigrationOrchestrator:
                 self.logger.error("❌ Migration failed")
                 return False
                 
+        except ImportError as e:
+            self.logger.error(f"❌ Failed to import migration modules: {e}")
+            self.logger.error(f"💡 Check that migration/ directory exists with required modules:")
+            self.logger.error(f"   • migration/__init__.py")
+            self.logger.error(f"   • migration/data_migrator.py")
+            self.logger.error(f"   • migration/schema_analyzer.py")
+            self.logger.error(f"   • migration/config.py")
+            return False
         except Exception as e:
             self.logger.error(f"❌ Failed to migrate data: {e}")
             import traceback
             self.logger.debug(f"Full traceback: {traceback.format_exc()}")
             return False
     
-    def step_4_import_historical_excel_data(self) -> bool:
-        """Step 4: Import historical Excel data with CRM metadata support"""
-        self.logger.info("📥 STEP 4: Importing historical Excel data")
+    def step_3_import_historical_excel_data(self) -> bool:
+        """Step 3: Import historical Excel data with CRM metadata support"""
+        self.logger.info("📥 STEP 3: Importing historical Excel data")
         self.logger.info("📊 This will import multiple historical snapshots")
         self.logger.info("🕐 Will use CRM file timestamps if available")
         
@@ -668,7 +566,7 @@ class MainMigrationOrchestrator:
                         return None
         else:
             print(f"\n⚠️  No Excel files found in {import_dir}")
-            print(f"💡 Place files in: {import_dir}")
+            print(f"💡 Place Excel files in: {import_dir}")
             print(f"💡 Expected files:")
             print(f"   📋 pipeline-import.xlsx")
             print(f"   📄 hubspot-crm-exports-weekly-status-company-*.csv")
@@ -728,12 +626,11 @@ class MainMigrationOrchestrator:
         return confirm in ['y', 'yes']
     
     def run_single_step(self, step_number: int) -> bool:
-        """Run a single step - COMPLETE 4-step process"""
+        """Run a single step - SIMPLIFIED 3-step process"""
         steps = {
-            1: ("Clean staging dataset", self.step_1_clean_staging_dataset),
-            2: ("Create tables via staging cloud function", self.step_2_create_tables_via_e2e_test),
-            3: ("Migrate prod to staging (companies + deals)", self.step_3_migrate_prod_to_staging),
-            4: ("Import historical Excel data", self.step_4_import_historical_excel_data)
+            1: ("Create tables using simple table creator", self.step_1_create_tables_via_simple_creator),
+            2: ("Migrate prod to staging (companies + deals)", self.step_2_migrate_prod_to_staging),
+            3: ("Import historical Excel data", self.step_3_import_historical_excel_data)
         }
         
         if step_number not in steps:
@@ -759,10 +656,10 @@ class MainMigrationOrchestrator:
         return success
     
     def run_all_steps(self) -> bool:
-        """Run all migration steps in sequence - COMPLETE 4-step process"""
+        """Run all migration steps in sequence - SIMPLIFIED 3-step process"""
         self.logger.info("🚀 FULL MIGRATION: Running all steps")
         
-        steps = [1, 2, 3, 4]  # Complete 4-step process
+        steps = [1, 2, 3]  # Simplified 3-step process
         
         for step_num in steps:
             if not self.run_single_step(step_num):
@@ -778,15 +675,14 @@ class MainMigrationOrchestrator:
         return True
     
     def show_status(self) -> None:
-        """Show current migration status - COMPLETE 4-step process"""
+        """Show current migration status - SIMPLIFIED 3-step process"""
         print(f"\n📊 MIGRATION STATUS")
         print("=" * 50)
         
         steps = [
-            ("1. Clean staging dataset", self.steps_completed['clean_dataset']),
-            ("2. Create tables via staging cloud function", self.steps_completed['create_tables']),
-            ("3. Migrate prod to staging (companies + deals + auto-clear)", self.steps_completed['migrate_data']),
-            ("4. Import historical Excel data (multiple snapshots)", self.steps_completed['import_excel'])
+            ("1. Create tables (using simple_table_creator.py)", self.steps_completed['create_tables']),
+            ("2. Migrate prod to staging (companies + deals)", self.steps_completed['migrate_data']),
+            ("3. Import historical Excel data (multiple snapshots)", self.steps_completed['import_excel'])
         ]
         
         for step_name, completed in steps:
@@ -794,13 +690,12 @@ class MainMigrationOrchestrator:
             print(f"  {status} {step_name}")
         
         completed_count = sum(self.steps_completed.values())
-        print(f"\nProgress: {completed_count}/4 steps completed")
+        print(f"\nProgress: {completed_count}/3 steps completed")
         
-        print(f"\n💡 COMPLETE WORKFLOW:")
-        print(f"  • Step 1: Clean environment")
-        print(f"  • Step 2: Create table structure")
-        print(f"  • Step 3: Import current production data")
-        print(f"  • Step 4: Import historical Excel data")
+        print(f"\n💡 SIMPLIFIED WORKFLOW:")
+        print(f"  • Step 1: Create table structure (via simple_table_creator.py)")
+        print(f"  • Step 2: Import current production data")
+        print(f"  • Step 3: Import historical Excel data")
     
     def show_final_summary(self) -> None:
         """Show final migration summary"""
@@ -850,10 +745,10 @@ class MainMigrationOrchestrator:
         print(f"💡 Run ingest pipeline to populate reference data")
     
     def interactive_menu(self):
-        """Interactive menu for migration orchestration - COMPLETE 4-step process"""
+        """Interactive menu for migration orchestration - SIMPLIFIED 3-step process"""
         while True:
             print(f"\n{'='*60}")
-            print(f"🚀 MAIN MIGRATION ORCHESTRATOR")
+            print(f"🚀 MAIN MIGRATION ORCHESTRATOR (SIMPLIFIED)")
             print(f"{'='*60}")
             print(f"Project: {self.project_id}")
             print(f"Target: {self.staging_dataset}")
@@ -868,28 +763,26 @@ class MainMigrationOrchestrator:
             self.show_status()
             
             print(f"\n📋 OPERATIONS")
-            print(f"  1) 🗑️  Step 1: Clean staging dataset")
-            print(f"  2) 🏗️  Step 2: Create tables via staging cloud function")
-            print(f"  3) 🚀 Step 3: Migrate prod to staging (companies + deals + auto-clear)")
-            print(f"  4) 📥 Step 4: Import historical Excel data")
+            print(f"  1) 🏗️  Step 1: Create tables (via simple_table_creator.py)")
+            print(f"  2) 🚀 Step 2: Migrate prod to staging (companies + deals)")
+            print(f"  3) 📥 Step 3: Import historical Excel data")
             print(f"  9) 🎯 Run ALL steps")
             print(f"  0) ❌ Exit")
             
             try:
-                choice = input(f"\n🔹 Enter choice (0-4, 9): ").strip()
+                choice = input(f"\n🔹 Enter choice (0-3, 9): ").strip()
                 
                 if choice == '0':
                     print("\n👋 Goodbye!")
                     break
-                elif choice in ['1', '2', '3', '4']:
+                elif choice in ['1', '2', '3']:
                     self.run_single_step(int(choice))
                 elif choice == '9':
                     print(f"\n🚨 FULL MIGRATION CONFIRMATION")
-                    print(f"This will run the complete 4-step process:")
-                    print(f"  1. DELETE all tables in staging")
-                    print(f"  2. Create new table structure")
-                    print(f"  3. Migrate companies and deals from production")
-                    print(f"  4. Import historical Excel data (multiple snapshots)")
+                    print(f"This will run the complete 3-step process:")
+                    print(f"  1. Create table structure using simple_table_creator.py")
+                    print(f"  2. Migrate companies and deals from production")
+                    print(f"  3. Import historical Excel data (multiple snapshots)")
                     print(f"  💡 Complete staging setup with production + historical data")
                     print(f"  ⚡ Reference data will come from ingest pipeline")
                     
@@ -899,7 +792,7 @@ class MainMigrationOrchestrator:
                     else:
                         print("❌ Operation cancelled")
                 else:
-                    print("❌ Invalid choice. Please select 0-4 or 9.")
+                    print("❌ Invalid choice. Please select 0-3 or 9.")
                     
             except KeyboardInterrupt:
                 print("\n\n👋 Goodbye!")
@@ -924,13 +817,13 @@ def main():
         
         if command == 'status':
             orchestrator.show_status()
-        elif command in ['1', '2', '3', '4']:
+        elif command in ['1', '2', '3']:
             orchestrator.run_single_step(int(command))
         elif command == 'all':
             orchestrator.run_all_steps()
         else:
             print(f"Unknown command: {command}")
-            print("Available commands: status, 1, 2, 3, 4, all")
+            print("Available commands: status, 1, 2, 3, all")
     else:
         orchestrator.interactive_menu()
 

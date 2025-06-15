@@ -1,4 +1,6 @@
-# src/excel_import/data_mapper.py
+# File: build-staging/first_stage_data/excel_import/data_mapper.py
+# UPDATED VERSION - Fix to use record_timestamp instead of timestamp
+
 import pandas as pd
 import logging
 from typing import Dict, List, Any, Optional
@@ -103,7 +105,7 @@ def _map_company_data(df: pd.DataFrame, snapshot_id: str) -> List[Dict]:
             # Build record following hs_companies schema
             record = {
                 'snapshot_id': snapshot_id,
-                'timestamp': datetime.now(timezone.utc),
+                'record_timestamp': datetime.now(timezone.utc),  # ✅ FIXED: Changed from 'timestamp'
             }
             
             # Map Excel columns to BigQuery columns
@@ -167,7 +169,7 @@ def _map_deal_data(df: pd.DataFrame, snapshot_id: str) -> List[Dict]:
         try:
             record = {
                 'snapshot_id': snapshot_id,
-                'timestamp': datetime.now(timezone.utc),
+                'record_timestamp': datetime.now(timezone.utc),  # ✅ FIXED: Changed from 'timestamp'
             }
             
             # Map Excel columns to BigQuery columns

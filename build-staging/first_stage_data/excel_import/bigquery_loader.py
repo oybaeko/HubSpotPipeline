@@ -38,9 +38,9 @@ def load_to_bigquery(mapped_data: Dict[str, List[Dict]], dry_run: bool = True):
         # Fix datetime serialization for BigQuery
         logger.info(f"🕐 Converting datetime objects for BigQuery compatibility...")
         for record in records:
-            if 'timestamp' in record and isinstance(record['timestamp'], datetime):
+            if 'record_timestamp' in record and isinstance(record['record_timestamp'], datetime):
                 # Convert datetime to BigQuery-compatible ISO string
-                record['timestamp'] = record['timestamp'].isoformat()
+                record['record_timestamp'] = record['record_timestamp'].isoformat()
                 
         table_name = TABLE_NAMES[data_type]
         table_id = f"{project_id}.{dataset_id}.{table_name}"
