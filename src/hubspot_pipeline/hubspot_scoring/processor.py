@@ -289,14 +289,47 @@ def process_unit_score_for_snapshot(snapshot_id: str):
         logger.error(f"❌ BigQuery unit-score job failed: {e}", exc_info=True)
         raise RuntimeError(f"Unit score processing failed: {e}")
 
+def ensure_score_history_table_exists():
+    """Ensure the score history table exists with correct schema"""
+    logger = logging.getLogger('hubspot.scoring.processor')
+    
+    client = bigquery.Client()
+    project_id = os.getenv('BIGQUERY_PROJECT_ID')
+    dataset_id = os.getenv('BIGQUERY_DATASET_ID')
+    table_name = "hs_pipeline_score_history"
+    full_table = f"{project_id}.{dataset_id}.{table_name}"
+    
+    try:
+        existing_table = client.get_table(full_table)
+        logger.debug(f"✅ Score history table {full_table} exists")
+    except Exception:
+        logger.info(f"📝 Creating score history table {full_table}")
+        
+        # Import schema from schema.py
+        from ..schema import SCHEMA_PIPELINE_SCORE_HISTORY
+        
+        # Convert schema to BigQuery schema fields
+        bq_schema = []
+        for col_name, col_type in SCHEMA_PIPELINE_SCORE_HISTORY:
+            bq_schema.append(bigquery.SchemaField(col_name, col_type))
+        
+        try:
+            table = bigquery.Table(full_table, schema=bq_schema)
+            client.create_table(table)
+            logger.info(f"✅ Created score history table {full_table}")
+        except Exception as e:
+            logger.error(f"❌ Failed to create score history table: {e}")
+            raise RuntimeError(f"Failed to create score history table: {e}")
+
 def process_score_history_for_snapshot(snapshot_id: str):
     """
     Processes and appends score history data for a given snapshot to the BigQuery score history table.
 
     Steps:
-      1) Sleep briefly to allow any streaming buffer to settle,
-      2) Aggregate pipeline_units rows by owner & combined_stage,
-      3) Append results to the hs_pipeline_score_history table.
+      1) Ensure the score history table exists,
+      2) Sleep briefly to allow any streaming buffer to settle,
+      3) Aggregate pipeline_units rows by owner & combined_stage,
+      4) Append results to the hs_pipeline_score_history table.
 
     Args:
         snapshot_id (str): The unique identifier for the snapshot to process.
@@ -308,6 +341,9 @@ def process_score_history_for_snapshot(snapshot_id: str):
     logger.info(f"🔹 Processing score history for snapshot: {snapshot_id}")
 
     start_time = datetime.utcnow()
+    
+    # Ensure the score history table exists before any operations
+    ensure_score_history_table_exists()
     
     # Brief wait to ensure data availability
     wait_secs = 5
@@ -405,7 +441,7 @@ def process_score_history_for_snapshot(snapshot_id: str):
         processing_time = (datetime.utcnow() - start_time).total_seconds()
         logger.error(f"❌ BigQuery score-history job failed: {e}", exc_info=True)
         raise RuntimeError(f"Score history processing failed: {e}")
-
+    
 def debug_snapshot_data(snapshot_id: str) -> dict:
     """
     Debug function to check what data exists for a snapshot
