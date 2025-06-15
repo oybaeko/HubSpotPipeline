@@ -1,4 +1,4 @@
-# src/hubspot_pipeline/scoring/stage_mapping.py
+# src/hubspot_pipeline/hubspot_scoring/stage_mapping.py
 
 import logging
 import os
@@ -77,7 +77,8 @@ def ensure_stage_mapping_table_exists():
 
 def populate_stage_mapping():
     """
-    Populate the hs_stage_mapping table with scoring configuration including record_timestamp
+    Populate the hs_stage_mapping table with scoring configuration using SQL INSERT
+    to maintain correct column order
     
     Returns:
         int: Number of stage mapping records loaded
@@ -94,22 +95,131 @@ def populate_stage_mapping():
         # Ensure table exists with correct schema
         ensure_stage_mapping_table_exists()
 
-        # Get stage mapping data with timestamps
+        # Get stage mapping data
         stage_mapping = get_stage_mapping_data()
 
-        # Recreate table (truncate and reload)
+        # Truncate existing data
         logger.info(f"🗑️ Truncating table {table_ref}")
         client.query(f"TRUNCATE TABLE `{table_ref}`").result()
 
-        # Load new data
-        logger.info(f"⏳ Loading {len(stage_mapping)} stage mapping records")
-        job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
-        job = client.load_table_from_json(stage_mapping, table_ref, job_config=job_config)
-        job.result()
+        # Build INSERT statement with column order derived from schema
+        column_names = [col_name for col_name, col_type in STAGE_MAPPING_SCHEMA]
+        columns_clause = ", ".join(column_names)
+        
+        insert_sql = f"""
+        INSERT INTO `{table_ref}` (
+            {columns_clause}
+        ) VALUES
+        """
+        
+        # Build VALUES clauses using schema order
+        values_clauses = []
+        for record in stage_mapping:
+            # Build values in schema order
+            values = []
+            for col_name, col_type in STAGE_MAPPING_SCHEMA:
+                value = record[col_name]
+                
+                # Handle different data types properly for SQL
+                if value is None:
+                    values.append("NULL")
+                elif col_type == "STRING":
+                    values.append(f"'{value}'")
+                elif col_type == "TIMESTAMP":
+                    values.append(f"TIMESTAMP('{value}')")
+                else:  # INTEGER, FLOAT
+                    values.append(str(value))
+            
+            values_clause = f"({', '.join(values)})"
+            values_clauses.append(values_clause)
+        
+        # Combine INSERT with VALUES
+        full_insert_sql = insert_sql + ",\n".join(values_clauses)
+        
+        logger.info(f"⏳ Loading {len(stage_mapping)} stage mapping records using SQL INSERT")
+        insert_job = client.query(full_insert_sql)
+        insert_job.result()
 
         logger.info(f"✅ Loaded {len(stage_mapping)} rows into {table_ref}")
         return len(stage_mapping)
         
     except Exception as e:
         logger.error(f"❌ Failed to populate stage mapping: {e}")
+        raise
+
+def populate_stage_mapping_alternative():
+    """
+    Alternative method: Delete and recreate table entirely to ensure correct column order
+    
+    Returns:
+        int: Number of stage mapping records loaded
+    """
+    logger = logging.getLogger('hubspot.scoring.stage_mapping')
+    logger.info("🔄 Populating stage mapping table (recreate method)")
+    
+    try:
+        client = bigquery.Client()
+        project_id = os.getenv('BIGQUERY_PROJECT_ID')
+        dataset_id = os.getenv('BIGQUERY_DATASET_ID')
+        table_ref = f"{project_id}.{dataset_id}.hs_stage_mapping"
+
+        # Step 1: Delete existing table
+        logger.info(f"🗑️ Deleting existing table {table_ref}")
+        client.delete_table(table_ref, not_found_ok=True)
+
+        # Step 2: Create table with correct schema order
+        bq_schema = []
+        for col_name, col_type in STAGE_MAPPING_SCHEMA:
+            bq_schema.append(bigquery.SchemaField(col_name, col_type))
+        
+        logger.info(f"📝 Creating table {table_ref} with correct schema order")
+        table = bigquery.Table(table_ref, schema=bq_schema)
+        client.create_table(table)
+
+        # Step 3: Load data using SQL to maintain schema column order
+        stage_mapping = get_stage_mapping_data()
+        
+        # Build INSERT statement with column order derived from schema
+        column_names = [col_name for col_name, col_type in STAGE_MAPPING_SCHEMA]
+        columns_clause = ", ".join(column_names)
+        
+        insert_sql = f"""
+        INSERT INTO `{table_ref}` (
+            {columns_clause}
+        ) VALUES
+        """
+        
+        # Build VALUES clauses using schema order
+        values_clauses = []
+        for record in stage_mapping:
+            # Build values in schema order
+            values = []
+            for col_name, col_type in STAGE_MAPPING_SCHEMA:
+                value = record[col_name]
+                
+                # Handle different data types properly for SQL
+                if value is None:
+                    values.append("NULL")
+                elif col_type == "STRING":
+                    values.append(f"'{value}'")
+                elif col_type == "TIMESTAMP":
+                    values.append(f"TIMESTAMP('{value}')")
+                else:  # INTEGER, FLOAT
+                    values.append(str(value))
+            
+            values_clause = f"({', '.join(values)})"
+            values_clauses.append(values_clause)
+        
+        # Execute INSERT
+        full_insert_sql = insert_sql + ",\n".join(values_clauses)
+        
+        logger.info(f"⏳ Loading {len(stage_mapping)} stage mapping records")
+        insert_job = client.query(full_insert_sql)
+        insert_job.result()
+
+        logger.info(f"✅ Loaded {len(stage_mapping)} rows into {table_ref}")
+        return len(stage_mapping)
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to populate stage mapping (recreate method): {e}")
         raise
