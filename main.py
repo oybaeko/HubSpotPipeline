@@ -128,6 +128,7 @@ def show_main_menu(env_info):
     print("  10. 🔄 Direct Score Specific - Use scoring modules directly")
     print("  11. 📋 Populate Stage Mapping - Update scoring reference data")
     print("  12. 🗑️ Clean Scoring Data - Delete scoring tables")
+    print("  17. 🔄 Rescore All Snapshots - Complete rebuild (ALL snapshots)")
     print()
     print("🔹 UTILITIES")
     print("  13. 📋 View Recent Snapshots - Check registry")
@@ -142,11 +143,11 @@ def get_user_choice():
     """Get and validate user menu choice"""
     while True:
         try:
-            choice = input("\n🔹 Enter your choice (0-16): ").strip()
-            if choice in [str(i) for i in range(17)]:
+            choice = input("\n🔹 Enter your choice (0-17): ").strip()
+            if choice in [str(i) for i in range(18)]:  # Updated range to include 17
                 return choice
             else:
-                print("❌ Invalid choice. Please enter a number between 0-16.")
+                print("❌ Invalid choice. Please enter a number between 0-17.")
         except KeyboardInterrupt:
             print("\n👋 Goodbye!")
             sys.exit(0)
@@ -411,6 +412,74 @@ def view_recent_snapshots(env_info):
     except Exception as e:
         print(f"❌ Failed to get snapshots: {e}")
 
+def run_rescore_all_test(env_info):
+    """Run rescore-all test using the scoring Cloud Function simulation"""
+    print(f"\n🔄 RESCORE ALL SNAPSHOTS")
+    print(f"🌍 Environment: {env_info['environment']}")
+    print(f"📊 Dataset: {env_info['dataset']}")
+    print(f"🏗️ Project: {env_info['project']}")
+    
+    if env_info['is_production']:
+        print("\n" + "🚨"*20)
+        print("⚠️  WARNING: YOU ARE IN PRODUCTION ENVIRONMENT!")
+        print("⚠️  THIS WILL RESCORE ALL PRODUCTION DATA!")
+        print("🚨"*20)
+    elif env_info['is_staging']:
+        print("\n" + "⚠️"*20)
+        print("🔶 CAUTION: You are in STAGING environment")
+        print("🔶 This will rescore all staging data")
+        print("⚠️"*20)
+    else:
+        print("\n✅ Safe development environment")
+    
+    action_desc = "RESCORE ALL SNAPSHOTS - This will process every snapshot in the registry"
+    
+    if not confirm_environment_action(env_info, action_desc):
+        return None
+    
+    print(f"\n🔄 Testing Rescore-All Operation")
+    print("🎯 Target: ALL snapshots in registry")
+    print("-" * 50)
+    
+    try:
+        # Initialize scoring environment
+        from src.hubspot_pipeline.hubspot_scoring.config import init_env as scoring_init_env
+        scoring_init_env(log_level='INFO')
+        
+        # Import and run rescore-all
+        from src.hubspot_pipeline.hubspot_scoring.rescore_all import handle_rescore_all_complete
+        
+        print("⚙️ Running rescore-all operation...")
+        print("⏳ This may take significant time depending on snapshot count...")
+        
+        # Execute rescore-all
+        result = handle_rescore_all_complete()
+        
+        print("-" * 50)
+        if result.get('status') in ['success', 'partial_success']:
+            print("✅ Rescore-all operation completed!")
+            print(f"📊 Results Summary:")
+            print(f"   • Total snapshots: {result['snapshots']['discovered']}")
+            print(f"   • Successfully processed: {result['snapshots']['processed_successfully']}")
+            print(f"   • Failed: {result['snapshots']['failed']}")
+            print(f"   • Total duration: {result['timing']['total_duration_seconds']:.1f} seconds")
+            print(f"   • Average per snapshot: {result['timing']['average_per_snapshot_seconds']:.1f} seconds")
+            
+            if result['snapshots']['failed'] > 0:
+                print(f"\n⚠️ Failed snapshots:")
+                for failure in result.get('failed_snapshots', []):
+                    print(f"   • {failure['snapshot_id']}: {failure['error']}")
+        else:
+            print(f"❌ Rescore-all operation failed: {result.get('error', 'Unknown error')}")
+        
+        return result
+        
+    except Exception as e:
+        print("-" * 50)
+        print(f"❌ Rescore-all test failed: {e}")
+        logging.error(f"Rescore-all test failed: {e}", exc_info=True)
+        return None
+
 def get_custom_ingest_parameters():
     """Get custom parameters for ingest testing"""
     print("\n🔧 Custom Ingest Parameters")
@@ -596,6 +665,10 @@ def main():
         elif choice == '16':
             # Clean all data
             clean_data_tables('all', env_info)
+
+        elif choice == '17':
+            # Rescore all snapshots
+            run_rescore_all_test(env_info)
         
         # Ask if user wants to continue
         if choice != '0':

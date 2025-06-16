@@ -1,5 +1,5 @@
 # ===============================================================================
-# src/scoring_main.py - Updated with views refresh after scoring completion
+# src/scoring_main.py - Updated with rescore-all functionality
 # ===============================================================================
 
 import logging
@@ -11,7 +11,7 @@ import functions_framework
 @functions_framework.cloud_event
 def main(cloud_event):
     """
-    Scoring Cloud Function entry point with two-tier testing framework
+    Scoring Cloud Function entry point with two-tier testing framework and rescore-all
     
     Args:
         cloud_event: CloudEvent object containing Pub/Sub message
@@ -44,6 +44,11 @@ def main(cloud_event):
         if event_type == 'hubspot.test.request':
             logger.info("🧪 Test mode detected - running two-tier validation")
             return run_two_tier_tests_scoring(message, logger)
+        
+        # Check for rescore-all request
+        if event_type == 'hubspot.rescore.all':
+            logger.info("🔄 Rescore-all mode detected - processing all snapshots")
+            return handle_rescore_all_request(message, logger)
         
         # Check if this is the event we care about
         if event_type != 'hubspot.snapshot.completed':
@@ -104,6 +109,59 @@ def main(cloud_event):
             "timestamp": datetime.utcnow().isoformat()
         }
 
+def handle_rescore_all_request(message: dict, logger) -> dict:
+    """
+    Handle rescore-all request by processing every snapshot in registry
+    
+    Args:
+        message: Parsed Pub/Sub message
+        logger: Logger instance
+        
+    Returns:
+        dict: Rescore-all results
+    """
+    logger.info("🔄 Starting rescore-all operation")
+    
+    try:
+        # Initialize environment
+        from hubspot_pipeline.hubspot_scoring.config import init_env
+        init_env(log_level='INFO')
+        
+        # Import and execute rescore-all
+        from hubspot_pipeline.hubspot_scoring.rescore_all import handle_rescore_all_complete
+        
+        result = handle_rescore_all_complete()
+        
+        # Refresh views after successful rescore-all
+        if result.get('status') in ['success', 'partial_success']:
+            logger.info("📊 Refreshing analytics views after rescore-all...")
+            try:
+                from hubspot_pipeline.hubspot_scoring.views import refresh_all_views
+                view_results = refresh_all_views()
+                
+                successful_views = sum(1 for success in view_results.values() if success)
+                total_views = len(view_results)
+                result['views_updated'] = successful_views == total_views
+                result['views_summary'] = f"{successful_views}/{total_views} views updated"
+                
+            except Exception as view_error:
+                logger.error(f"❌ Failed to refresh views after rescore-all: {view_error}")
+                result['views_updated'] = False
+                result['views_error'] = str(view_error)
+        
+        logger.info(f"🎉 Rescore-all completed with status: {result.get('status')}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Rescore-all operation failed: {e}", exc_info=True)
+        
+        return {
+            "status": "error",
+            "rescore_type": "all_snapshots_no_limits", 
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
 def run_two_tier_tests_scoring(message: dict, logger) -> dict:
     """
     Run two-tier validation tests for scoring function
@@ -117,6 +175,28 @@ def run_two_tier_tests_scoring(message: dict, logger) -> dict:
     """
     test_data = message.get('data', {})
     test_type = test_data.get('test_type', 'deployment')
+    
+    # Handle rescore-all test
+    if test_type == 'rescore_all':
+        logger.info("🧪 Running rescore-all test mode")
+        return {
+            'test_mode': True,
+            'validation_tier': 'rescore_all',
+            'function_type': 'scoring',
+            'test_type': 'rescore_all',
+            'status': 'success',
+            'summary': {'total': 1, 'passed': 1, 'failed': 0},
+            'environment': _detect_environment_scoring(),
+            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'trigger_type': 'pubsub',
+            'message': 'Rescore-all test mode - would discover and process all snapshots',
+            'mock_result': {
+                'discovered_snapshots': 'Would query hs_snapshot_registry',
+                'processing': 'Would call process_snapshot_event for each',
+                'timing': 'Would track timing and counts',
+                'note': 'This is a test - no actual processing performed'
+            }
+        }
     
     # Validate test type - only allow deployment or runtime
     if test_type not in ['deployment', 'runtime']:

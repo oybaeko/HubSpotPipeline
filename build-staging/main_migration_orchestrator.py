@@ -56,7 +56,8 @@ class MainMigrationOrchestrator:
         self.steps_completed = {
             'create_tables': False,
             'migrate_data': False,
-            'import_excel': False
+            'import_excel': False,
+            'rescore_all': False
         }
     
     def _get_auth_info(self) -> Dict:
@@ -288,7 +289,7 @@ class MainMigrationOrchestrator:
             sys.path.insert(0, str(excel_import_path))
             
             from excel_import import ExcelProcessor, SnapshotProcessor
-            from excel_import.bigquery_loader import load_multiple_snapshots
+            from first_stage_data.excel_import.bigquery_loader import load_multiple_snapshots
             
             # Process Excel file
             self.logger.info(f"📂 Processing Excel file: {Path(excel_file).name}")
@@ -354,6 +355,119 @@ class MainMigrationOrchestrator:
             import traceback
             self.logger.debug(f"Full traceback: {traceback.format_exc()}")
             return False
+        
+    def step_4_rescore_all_snapshots(self) -> bool:
+        """Step 4: Rescore all snapshots using Cloud Function"""
+        self.logger.info("🔄 STEP 4: Rescoring all snapshots via Cloud Function")
+        self.logger.info("📊 This will trigger the scoring function to process ALL snapshots")
+        self.logger.info("⚡ Uses Pub/Sub to call the deployed scoring Cloud Function")
+        
+        try:
+            # Check if gcloud is available
+            result = subprocess.run("gcloud --version", shell=True, capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                self.logger.error("❌ gcloud CLI not available")
+                self.logger.error("💡 Install Google Cloud SDK: https://cloud.google.com/sdk/docs/install")
+                return False
+            
+            # Confirm operation
+            print(f"\n🔄 RESCORE ALL SNAPSHOTS")
+            print(f"🎯 Target: ALL snapshots in {self.staging_dataset}")
+            print(f"⚡ Method: Pub/Sub → Cloud Function")
+            print(f"🕐 Estimated time: ~35 seconds per snapshot")
+            
+            # Try to estimate snapshot count
+            try:
+                table_ref = f"{self.project_id}.{self.staging_dataset}.hs_companies"
+                count_query = f"SELECT COUNT(DISTINCT snapshot_id) as snapshots FROM `{table_ref}`"
+                result = self.client.query(count_query).result()
+                
+                for row in result:
+                    snapshot_count = row.snapshots
+                    estimated_time = snapshot_count * 35  # seconds
+                    print(f"📊 Estimated snapshots: {snapshot_count}")
+                    print(f"⏱️ Estimated duration: {estimated_time//60}m {estimated_time%60}s")
+                    break
+            except Exception as e:
+                self.logger.debug(f"Could not estimate snapshot count: {e}")
+                print(f"📊 Snapshot count: Unknown")
+            
+            print(f"\nThis will:")
+            print(f"  ✅ Process every snapshot found in registry")
+            print(f"  ✅ Generate pipeline scoring data")
+            print(f"  ✅ Update analytics views")
+            print(f"  ✅ Track progress in Cloud Function logs")
+            
+            confirm = input(f"\nType 'RESCORE ALL' to continue: ").strip()
+            if confirm != 'RESCORE ALL':
+                self.logger.info("❌ Rescore operation cancelled")
+                return False
+            
+            # Execute gcloud pubsub command
+            self.logger.info("🚀 Triggering rescore-all via Pub/Sub...")
+            
+            pubsub_cmd = [
+                "gcloud", "pubsub", "topics", "publish", "hubspot-events-staging",
+                '--message={"type":"hubspot.rescore.all","data":{}}',  # ← FIXED JSON
+                "--project", self.project_id
+            ]
+            
+            self.logger.info(f"📤 Publishing message to hubspot-events-staging topic...")
+            result = subprocess.run(pubsub_cmd, capture_output=True, text=True, check=True)
+            
+            if result.returncode == 0:
+                # Extract message ID from output
+                output = result.stdout.strip()
+                self.logger.info(f"✅ Pub/Sub message published successfully")
+                if "messageIds:" in output:
+                    # Extract message ID
+                    lines = output.split('\n')
+                    for line in lines:
+                        if line.strip().startswith('- '):
+                            message_id = line.strip()[2:].strip("'\"")
+                            self.logger.info(f"📨 Message ID: {message_id}")
+                            break
+                
+                self.logger.info("🔄 Rescore-all operation initiated")
+                self.logger.info("📊 The scoring function is now processing all snapshots")
+                
+                # Show monitoring instructions
+                print(f"\n📊 MONITORING PROGRESS")
+                print(f"🔍 View logs in Google Cloud Console:")
+                print(f"   • Go to: Logging > Logs Explorer")
+                print(f"   • Query: resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"hubspot-scoring-staging\"")
+                print(f"   • Look for: 'rescore-all' logs")
+                
+                print(f"\n⏱️ EXPECTED TIMELINE")
+                print(f"   • Processing: 25-35 seconds per snapshot")
+                print(f"   • Views refresh: Additional 1-2 seconds")
+                print(f"   • Completion: Look for '🎉 Rescore-all completed' message")
+                
+                print(f"\n✅ SUCCESS INDICATORS")
+                print(f"   • 'Discovered X snapshots for rescoring'")
+                print(f"   • 'Processing snapshot N/X: ...'")
+                print(f"   • 'Rescore-all completed: X/X successful'")
+                print(f"   • 'All 4 analytics views refreshed successfully'")
+                
+                self.steps_completed['rescore_all'] = True
+                return True
+            else:
+                self.logger.error(f"❌ Pub/Sub command failed")
+                self.logger.error(f"Exit code: {result.returncode}")
+                if result.stderr:
+                    self.logger.error(f"Error: {result.stderr}")
+                return False
+                
+        except subprocess.CalledProcessError as e:
+            self.logger.error(f"❌ gcloud command failed: {e}")
+            if e.stderr:
+                self.logger.error(f"Error output: {e.stderr}")
+            if e.stdout:
+                self.logger.error(f"Standard output: {e.stdout}")
+            return False
+        except Exception as e:
+            self.logger.error(f"❌ Failed to trigger rescore-all: {e}")
+            return False   
     
     def _extract_crm_metadata(self, import_dir: Path) -> Dict:
         """Extract CRM metadata from CSV files in import directory"""
@@ -630,7 +744,8 @@ class MainMigrationOrchestrator:
         steps = {
             1: ("Create tables using simple table creator", self.step_1_create_tables_via_simple_creator),
             2: ("Migrate prod to staging (companies + deals)", self.step_2_migrate_prod_to_staging),
-            3: ("Import historical Excel data", self.step_3_import_historical_excel_data)
+            3: ("Import historical Excel data", self.step_3_import_historical_excel_data),
+            4: ("Rescore all snapshots via Cloud Function", self.step_4_rescore_all_snapshots)
         }
         
         if step_number not in steps:
@@ -682,7 +797,8 @@ class MainMigrationOrchestrator:
         steps = [
             ("1. Create tables (using simple_table_creator.py)", self.steps_completed['create_tables']),
             ("2. Migrate prod to staging (companies + deals)", self.steps_completed['migrate_data']),
-            ("3. Import historical Excel data (multiple snapshots)", self.steps_completed['import_excel'])
+            ("3. Import historical Excel data (multiple snapshots)", self.steps_completed['import_excel']),
+            ("4. Rescore all snapshots via Cloud Function", self.steps_completed['rescore_all'])
         ]
         
         for step_name, completed in steps:
@@ -690,7 +806,7 @@ class MainMigrationOrchestrator:
             print(f"  {status} {step_name}")
         
         completed_count = sum(self.steps_completed.values())
-        print(f"\nProgress: {completed_count}/3 steps completed")
+        print(f"\nProgress: {completed_count}/4 steps completed")
         
         print(f"\n💡 SIMPLIFIED WORKFLOW:")
         print(f"  • Step 1: Create table structure (via simple_table_creator.py)")
@@ -766,16 +882,17 @@ class MainMigrationOrchestrator:
             print(f"  1) 🏗️  Step 1: Create tables (via simple_table_creator.py)")
             print(f"  2) 🚀 Step 2: Migrate prod to staging (companies + deals)")
             print(f"  3) 📥 Step 3: Import historical Excel data")
+            print(f"  4) 🔄 Step 4: Rescore all snapshots (via Cloud Function)")
             print(f"  9) 🎯 Run ALL steps")
             print(f"  0) ❌ Exit")
             
             try:
-                choice = input(f"\n🔹 Enter choice (0-3, 9): ").strip()
+                choice = input(f"\n🔹 Enter choice (0-4, 9): ").strip()
                 
                 if choice == '0':
                     print("\n👋 Goodbye!")
                     break
-                elif choice in ['1', '2', '3']:
+                elif choice in ['1', '2', '3', '4']:
                     self.run_single_step(int(choice))
                 elif choice == '9':
                     print(f"\n🚨 FULL MIGRATION CONFIRMATION")
