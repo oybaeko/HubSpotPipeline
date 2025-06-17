@@ -11,6 +11,7 @@ import argparse
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Optional
+import time
 
 class ExcelImportStep:
     """Simplified Excel import step using existing modules"""
@@ -65,6 +66,71 @@ class ExcelImportStep:
             self.logger.error(f"❌ Missing required module: {e}")
             return False
     
+    def _cleanup_previous_excel_imports(self):
+        """Clean up all previous Excel import data before loading new data"""
+        try:
+            from bigquery_utils import get_bigquery_client
+            
+            client = get_bigquery_client(self.project_id)
+            table_ref = f"{self.project_id}.{self.staging_dataset}.hs_snapshot_registry"
+            
+            self.logger.info("🗑️ Cleaning up previous Excel import data...")
+            
+            # Get previous Excel import snapshots
+            snapshot_query = f"""
+            SELECT DISTINCT snapshot_id 
+            FROM `{table_ref}`
+            WHERE triggered_by = 'excel_import'
+            """
+            
+            previous_snapshots = []
+            try:
+                result = client.query(snapshot_query).result()
+                previous_snapshots = [row.snapshot_id for row in result]
+            except Exception:
+                previous_snapshots = []
+            
+            if previous_snapshots:
+                self.logger.info(f"🔍 Found {len(previous_snapshots)} previous Excel snapshots to clean")
+                
+                # For streaming buffer issues, use proper cleanup with retry logic
+                snapshot_list = "', '".join(previous_snapshots)
+                
+                # Clean companies, deals, and registry with retry logic
+                tables_to_clean = [
+                    ('hs_companies', 'companies'),
+                    ('hs_deals', 'deals'),
+                    ('hs_snapshot_registry', 'registry entries')
+                ]
+                
+                for table_name, description in tables_to_clean:
+                    if table_name == 'hs_snapshot_registry':
+                        query = f"DELETE FROM `{self.project_id}.{self.staging_dataset}.{table_name}` WHERE triggered_by = 'excel_import'"
+                    else:
+                        query = f"DELETE FROM `{self.project_id}.{self.staging_dataset}.{table_name}` WHERE snapshot_id IN ('{snapshot_list}')"
+                    
+                    # Retry logic for streaming buffer
+                    max_retries = 3
+                    for attempt in range(max_retries):
+                        try:
+                            job = client.query(query)
+                            job.result()
+                            self.logger.info(f"✅ Cleaned up {description}")
+                            break
+                        except Exception as e:
+                            if "streaming buffer" in str(e) and attempt < max_retries - 1:
+                                wait_time = 30 * (attempt + 1)  # 30s, 60s, 90s
+                                self.logger.info(f"⏳ Streaming buffer conflict, waiting {wait_time}s (attempt {attempt + 1})")
+                                time.sleep(wait_time)
+                            else:
+                                self.logger.warning(f"⚠️ Failed to clean {description}: {e}")
+                                break
+            else:
+                self.logger.info("ℹ️ No previous Excel import data to clean")
+                
+        except Exception as e:
+            self.logger.warning(f"⚠️ Cleanup failed: {e}")
+    
     def execute(self, excel_file: str = None, dry_run: bool = False) -> bool:
         """Execute Excel import using existing modules"""
         
@@ -86,6 +152,12 @@ class ExcelImportStep:
             # Validate prerequisites
             if not self.validate_prerequisites():
                 return False
+            
+            # CLEANUP FIRST - BEFORE ANY DATA LOADING
+            if not dry_run:
+                self._cleanup_previous_excel_imports()
+            else:
+                self.logger.info("🛑 DRY RUN: Skipping cleanup")
             
             # Import required modules
             from excel_import import ExcelProcessor, SnapshotProcessor
@@ -246,10 +318,14 @@ class ExcelImportStep:
             return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
     
     def _populate_registry(self, snapshots_data: Dict, crm_metadata: Dict) -> int:
-        """Populate snapshot registry for scoring readiness"""
+        """Populate snapshot registry for scoring readiness - SIMPLIFIED (cleanup is done earlier)"""
         try:
             from bigquery_utils import get_bigquery_client, insert_rows_with_smart_retry
             
+            client = get_bigquery_client(self.project_id)
+            table_ref = f"{self.project_id}.{self.staging_dataset}.hs_snapshot_registry"
+            
+            # CREATE NEW REGISTRY ENTRIES ONLY (cleanup was done in execute() method)
             registry_entries = []
             current_time = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
             
@@ -260,17 +336,15 @@ class ExcelImportStep:
                 registry_entry = {
                     'snapshot_id': snapshot_id,
                     'record_timestamp': current_time,
-                    'triggered_by': 'excel_import_crm',
-                    'status': 'ingest_completed_historical',
+                    'triggered_by': 'excel_import',
+                    'status': 'completed',
                     'notes': f"Excel+CRM import | Companies: {len(companies)}, Deals: {len(deals)}"
                 }
                 
                 registry_entries.append(registry_entry)
             
+            # Insert new registry entries
             if registry_entries:
-                client = get_bigquery_client(self.project_id)
-                table_ref = f"{self.project_id}.{self.staging_dataset}.hs_snapshot_registry"
-                
                 insert_rows_with_smart_retry(
                     client, 
                     table_ref, 

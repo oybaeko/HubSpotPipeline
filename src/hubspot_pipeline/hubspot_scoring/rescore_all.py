@@ -8,10 +8,10 @@ from google.cloud import bigquery
 
 def get_all_snapshots_from_registry() -> List[str]:
     """
-    Get all completed ingest snapshots from registry, ordered by timestamp
+    Get all unique snapshots from registry, ordered by timestamp
     
     Returns:
-        List[str]: All snapshot IDs that have completed ingest
+        List[str]: All unique snapshot IDs found in registry
     """
     logger = logging.getLogger('hubspot.scoring.rescore_all')
     
@@ -23,8 +23,7 @@ def get_all_snapshots_from_registry() -> List[str]:
         query = f"""
         SELECT snapshot_id
         FROM `{project_id}.{dataset_id}.hs_snapshot_registry`
-        WHERE status LIKE '%ingest%'
-          AND triggered_by LIKE '%ingest%'
+        WHERE status = 'completed'
         GROUP BY snapshot_id
         ORDER BY MIN(record_timestamp) ASC
         """

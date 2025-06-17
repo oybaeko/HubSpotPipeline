@@ -418,7 +418,7 @@ class ProductionMigrationStep:
                         '{target_snapshot_id}',
                         CURRENT_TIMESTAMP(),
                         'production_migration_step3',
-                        'migration_completed_production_data',
+                        'completed',
                         'Migrated from production snapshot {prod_snapshot_id} | Tables: {", ".join(tables_migrated)} | Records: {total_records:,}'
                     )
                     """

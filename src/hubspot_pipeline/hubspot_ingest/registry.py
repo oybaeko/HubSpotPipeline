@@ -95,20 +95,21 @@ def register_snapshot_start(snapshot_id: str, triggered_by: str = "manual") -> b
         logger.error(f"❌ Exception registering snapshot start: {e}")
         return False
 
+# Changes needed in src/hubspot_pipeline/hubspot_ingest/registry.py
+
+def register_snapshot_start(snapshot_id: str, triggered_by: str = "manual") -> bool:
+    """
+    Register the start of a snapshot process - NO CHANGES NEEDED
+    This one already uses "started" status correctly
+    """
+    # ... existing code is already correct ...
+    # status = "started" ✅
+    pass
 
 def register_snapshot_ingest_complete(snapshot_id: str, data_counts: Dict[str, int], 
                                     reference_counts: Dict[str, int]) -> bool:
     """
-    Register the completion of snapshot ingest phase using parameterized query.
-    Uses INSERT instead of UPDATE to avoid streaming buffer conflicts.
-    
-    Args:
-        snapshot_id: The snapshot identifier
-        data_counts: Dict of data table counts
-        reference_counts: Dict of reference table counts
-        
-    Returns:
-        True if successful, False otherwise
+    Register the completion of snapshot ingest phase using simplified statuses
     """
     logger = logging.getLogger('hubspot.registry')
     
@@ -119,9 +120,9 @@ def register_snapshot_ingest_complete(snapshot_id: str, data_counts: Dict[str, i
         # Create comprehensive notes
         total_data = sum(data_counts.values())
         total_reference = sum(reference_counts.values())
-        notes = f"Ingest completed: {total_data} data records, {total_reference} reference records. Tables: {list(data_counts.keys())}"
+        notes = f"Ingest: {total_data} data records, {total_reference} reference records. Tables: {list(data_counts.keys())}"
         
-        # Insert new record for completion using parameterized query
+        # Insert new record for completion using simplified statuses
         query = f"""
         INSERT INTO `{table_ref}` (
             triggered_by,
@@ -141,14 +142,14 @@ def register_snapshot_ingest_complete(snapshot_id: str, data_counts: Dict[str, i
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter("triggered_by", "STRING", "ingest_completion"),
-                bigquery.ScalarQueryParameter("status", "STRING", "ingest_completed"),
+                bigquery.ScalarQueryParameter("status", "STRING", "completed"),  # CHANGED
                 bigquery.ScalarQueryParameter("notes", "STRING", notes),
                 bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id),
             ]
         )
         
         job = client.query(query, job_config=job_config)
-        job.result()  # Wait for completion
+        job.result()
         
         logger.info(f"✅ Registered ingest completion for snapshot {snapshot_id}")
         return True
@@ -160,7 +161,7 @@ def register_snapshot_ingest_complete(snapshot_id: str, data_counts: Dict[str, i
 
 def register_snapshot_failure(snapshot_id: str, error_message: str) -> bool:
     """
-    Register a snapshot failure using parameterized query.
+    Register snapshot failure in registry
     
     Args:
         snapshot_id: The snapshot identifier
@@ -173,35 +174,43 @@ def register_snapshot_failure(snapshot_id: str, error_message: str) -> bool:
     
     try:
         client = get_bigquery_client()
-        dataset = os.getenv("BIGQUERY_DATASET_ID", "hubspot_dev")
-        project_id = os.getenv("BIGQUERY_PROJECT_ID")
+        table_ref = get_table_reference("hs_snapshot_registry")
         
-        # Update the existing record (this doesn't use insertAll API, so no retry needed)
-        update_query = f"""
-        UPDATE `{project_id}.{dataset}.hs_snapshot_registry`
-        SET 
-            status = "failed",
-            notes = CONCAT(IFNULL(notes, ''), ' | ERROR: ', @error_message)
-        WHERE snapshot_id = @snapshot_id
+        # Insert new record for ingest failure
+        query = f"""
+        INSERT INTO `{table_ref}` (
+            triggered_by,
+            status,
+            notes,
+            snapshot_id,
+            record_timestamp
+        ) VALUES (
+            @triggered_by,
+            @status,
+            @notes,
+            @snapshot_id,
+            CURRENT_TIMESTAMP()
+        )
         """
         
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
+                bigquery.ScalarQueryParameter("triggered_by", "STRING", "ingest_failure"),
+                bigquery.ScalarQueryParameter("status", "STRING", "failed"),  # CHANGED
+                bigquery.ScalarQueryParameter("notes", "STRING", f"Ingest failed: {error_message}"),
                 bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id),
-                bigquery.ScalarQueryParameter("error_message", "STRING", str(error_message)[:500])  # Limit length
             ]
         )
         
-        query_job = client.query(update_query, job_config=job_config)
-        query_job.result()
+        job = client.query(query, job_config=job_config)
+        job.result()
         
-        logger.info(f"✅ Registered failure for snapshot {snapshot_id}")
+        logger.info(f"✅ Registered ingest failure for snapshot {snapshot_id}")
         return True
         
     except Exception as e:
-        logger.error(f"❌ Exception registering failure: {e}")
+        logger.error(f"❌ Failed to register ingest failure: {e}")
         return False
-
 
 def update_snapshot_status(snapshot_id: str, status: str, notes: Optional[str] = None) -> bool:
     """

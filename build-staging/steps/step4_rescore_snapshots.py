@@ -253,7 +253,7 @@ class RescoreSnapshotsStep:
                 '{rescore_operation_id}',
                 CURRENT_TIMESTAMP(),
                 'rescore_step4',
-                'rescore_initiated',
+                'started',
                 '{notes}'
             )
             """

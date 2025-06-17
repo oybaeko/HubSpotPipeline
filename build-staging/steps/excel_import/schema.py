@@ -22,7 +22,7 @@ SNAPSHOTS_TO_IMPORT = [
     {"date": "2025-04-27", "company_sheet": "company-2025-04-27", "deal_sheet": "deals-2025-04-27"},
     {"date": "2025-05-11", "company_sheet": "company-2025-05-11", "deal_sheet": "deals-2025-05-11"},
     {"date": "2025-05-18", "company_sheet": "company-2025-05-18", "deal_sheet": "deals-2025-05-18"},
-    {"date": "2025-05-25", "company_sheet": "company-2025-05-25", "deal_sheet": "deals-2025-05-25"},
+    {"date": "2025-05-26", "company_sheet": "company-2025-05-26", "deal_sheet": "deals-2025-05-26"},
     {"date": "2025-06-01", "company_sheet": "company-2025-06-01", "deal_sheet": "deals-2025-06-01"}
 ]
 
