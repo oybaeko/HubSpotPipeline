@@ -1,9 +1,12 @@
-# src/excel_import/excel_processor.py
+# build-staging/steps/excel_import/excel_processor.py
+# UPDATED VERSION - Uses Excel-specific configuration only
+
 import pandas as pd
 import logging
 from typing import Dict, List, Any, Tuple
 from pathlib import Path
 
+# Import Excel-specific configuration
 from .schema import SNAPSHOTS_TO_IMPORT
 
 class ExcelProcessor:

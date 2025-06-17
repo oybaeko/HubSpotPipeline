@@ -177,99 +177,141 @@ class MainMigrationOrchestrator:
             self.logger.error(f"❌ Excel import step failed: {e}")
             return False
     
-    def step_3_migrate_production(self, dry_run: bool = False) -> bool:
-        """Step 3: Migrate production data (placeholder - to be implemented)"""
-        self.logger.info("🚀 STEP 3: Migrating production data")
-        self.logger.info("💡 This step will be implemented as step3_migrate_production.py")
-        
-        # TODO: Implement step3_migrate_production.py
-        # For now, mark as completed for testing
-        self.logger.info("⏭️ Step 3 placeholder - marking as completed")
-        self.steps_completed['migrate_production'] = True
-        return True
-    
-    def step_4_rescore_all_snapshots(self) -> bool:
-        """Step 4: Rescore all snapshots using Cloud Function"""
-        self.logger.info("🔄 STEP 4: Rescoring all snapshots via Cloud Function")
-        self.logger.info("📊 This will trigger the scoring function to process ALL snapshots")
-        self.logger.info("⚡ Uses Pub/Sub to call the deployed scoring Cloud Function")
+    def step_3_migrate_production(self, dry_run: bool = False, clear_staging: bool = False) -> bool:
+        """Step 3: Migrate production data using external step module"""
+        self.logger.info("🚀 STEP 3: Migrating production data using external step module")
         
         try:
-            # Check if gcloud is available
-            result = subprocess.run("gcloud --version", shell=True, capture_output=True, text=True, check=False)
-            if result.returncode != 0:
-                self.logger.error("❌ gcloud CLI not available")
-                self.logger.error("💡 Install Google Cloud SDK: https://cloud.google.com/sdk/docs/install")
-                return False
+            # Import external step
+            from steps.step3_migrate_production import ProductionMigrationStep
             
-            # Try to estimate snapshot count
-            try:
-                table_ref = f"{self.project_id}.{self.staging_dataset}.hs_companies"
-                count_query = f"SELECT COUNT(DISTINCT snapshot_id) as snapshots FROM `{table_ref}`"
-                result = self.client.query(count_query).result()
+            # Create step instance
+            step = ProductionMigrationStep(self.project_id, self.staging_dataset)
+            
+            # Execute step
+            self.logger.info("🚀 Executing production migration step...")
+            success = step.execute(dry_run=dry_run, clear_staging=clear_staging)
+            
+            if success:
+                results = step.get_results()
+                self.logger.info("✅ Production migration completed successfully")
                 
-                for row in result:
-                    snapshot_count = row.snapshots
-                    estimated_time = snapshot_count * 35  # seconds
-                    self.logger.info(f"📊 Estimated snapshots: {snapshot_count}")
-                    self.logger.info(f"⏱️ Estimated duration: {estimated_time//60}m {estimated_time%60}s")
-                    break
-            except Exception as e:
-                self.logger.debug(f"Could not estimate snapshot count: {e}")
-                self.logger.info(f"📊 Snapshot count: Unknown")
-            
-            # Execute gcloud pubsub command
-            self.logger.info("🚀 Triggering rescore-all via Pub/Sub...")
-            
-            pubsub_cmd = [
-                "gcloud", "pubsub", "topics", "publish", "hubspot-events-staging",
-                '--message={"type":"hubspot.rescore.all","data":{}}',
-                "--project", self.project_id
-            ]
-            
-            self.logger.info(f"📤 Publishing message to hubspot-events-staging topic...")
-            result = subprocess.run(pubsub_cmd, capture_output=True, text=True, check=True)
-            
-            if result.returncode == 0:
-                # Extract message ID from output
-                output = result.stdout.strip()
-                self.logger.info(f"✅ Pub/Sub message published successfully")
-                if "messageIds:" in output:
-                    # Extract message ID
-                    lines = output.split('\n')
-                    for line in lines:
-                        if line.strip().startswith('- '):
-                            message_id = line.strip()[2:].strip("'\"")
-                            self.logger.info(f"📨 Message ID: {message_id}")
-                            break
+                try:
+                    migration_results = results['results'].get('tables_migrated', {})
+                    total_records = sum(table_result.get('total_count', 0) for table_result in migration_results.values())
+                    successful_tables = len([t for t, r in migration_results.items() if r.get('successful_snapshots', 0) > 0])
+                    total_snapshots = sum(r.get('successful_snapshots', 0) for r in migration_results.values())
+                    
+                    self.logger.info(f"📊 Tables migrated: {successful_tables}")
+                    self.logger.info(f"📊 Snapshots migrated: {total_snapshots}")
+                    self.logger.info(f"📊 Total records: {total_records:,}")
+                    
+                    if not dry_run:
+                        production_snapshots = results['results'].get('production_snapshots', [])
+                        self.logger.info(f"📸 Production snapshots preserved: {len(production_snapshots)}")
+                        for snapshot in production_snapshots:
+                            self.logger.info(f"  📅 {snapshot}")
                 
-                self.logger.info("🔄 Rescore-all operation initiated")
-                self.logger.info("📊 The scoring function is now processing all snapshots")
+                except Exception as result_processing_error:
+                    self.logger.error(f"❌ Error processing results: {result_processing_error}")
+                    self.logger.debug(f"Results structure: {results}")
                 
-                # Show monitoring instructions
-                self.logger.info("📊 Monitor progress in Google Cloud Console:")
-                self.logger.info("   • Logging > Logs Explorer")
-                self.logger.info("   • Query: resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"hubspot-scoring-staging\"")
-                
-                self.steps_completed['rescore_all'] = True
+                self.steps_completed['migrate_production'] = True
                 return True
             else:
-                self.logger.error(f"❌ Pub/Sub command failed")
-                self.logger.error(f"Exit code: {result.returncode}")
-                if result.stderr:
-                    self.logger.error(f"Error: {result.stderr}")
+                self.logger.error("❌ Production migration failed")
                 return False
                 
-        except subprocess.CalledProcessError as e:
-            self.logger.error(f"❌ gcloud command failed: {e}")
-            if e.stderr:
-                self.logger.error(f"Error output: {e.stderr}")
-            if e.stdout:
-                self.logger.error(f"Standard output: {e.stdout}")
+        except ImportError as e:
+            self.logger.error(f"❌ Failed to import production migration step: {e}")
+            self.logger.error("💡 Check that steps/step3_migrate_production.py exists")
             return False
         except Exception as e:
-            self.logger.error(f"❌ Failed to trigger rescore-all: {e}")
-            return False   
+            self.logger.error(f"❌ Production migration step failed: {e}")
+            return False
+
+    def step_4_rescore_all_snapshots(self) -> bool:
+            """Step 4: Rescore all snapshots using Cloud Function"""
+            self.logger.info("🔄 STEP 4: Rescoring all snapshots via Cloud Function")
+            self.logger.info("📊 This will trigger the scoring function to process ALL snapshots")
+            self.logger.info("⚡ Uses Pub/Sub to call the deployed scoring Cloud Function")
+            
+            try:
+                # Check if gcloud is available
+                result = subprocess.run("gcloud --version", shell=True, capture_output=True, text=True, check=False)
+                if result.returncode != 0:
+                    self.logger.error("❌ gcloud CLI not available")
+                    self.logger.error("💡 Install Google Cloud SDK: https://cloud.google.com/sdk/docs/install")
+                    return False
+                
+                # Try to estimate snapshot count
+                try:
+                    table_ref = f"{self.project_id}.{self.staging_dataset}.hs_companies"
+                    count_query = f"SELECT COUNT(DISTINCT snapshot_id) as snapshots FROM `{table_ref}`"
+                    result = self.client.query(count_query).result()
+                    
+                    for row in result:
+                        snapshot_count = row.snapshots
+                        estimated_time = snapshot_count * 35  # seconds
+                        self.logger.info(f"📊 Estimated snapshots: {snapshot_count}")
+                        self.logger.info(f"⏱️ Estimated duration: {estimated_time//60}m {estimated_time%60}s")
+                        break
+                except Exception as e:
+                    self.logger.debug(f"Could not estimate snapshot count: {e}")
+                    self.logger.info(f"📊 Snapshot count: Unknown")
+                
+                # Execute gcloud pubsub command
+                self.logger.info("🚀 Triggering rescore-all via Pub/Sub...")
+                
+                pubsub_cmd = [
+                    "gcloud", "pubsub", "topics", "publish", "hubspot-events-staging",
+                    '--message={"type":"hubspot.rescore.all","data":{}}',
+                    "--project", self.project_id
+                ]
+                
+                self.logger.info(f"📤 Publishing message to hubspot-events-staging topic...")
+                result = subprocess.run(pubsub_cmd, capture_output=True, text=True, check=True)
+                
+                if result.returncode == 0:
+                    # Extract message ID from output
+                    output = result.stdout.strip()
+                    self.logger.info(f"✅ Pub/Sub message published successfully")
+                    if "messageIds:" in output:
+                        # Extract message ID
+                        lines = output.split('\n')
+                        for line in lines:
+                            if line.strip().startswith('- '):
+                                message_id = line.strip()[2:].strip("'\"")
+                                self.logger.info(f"📨 Message ID: {message_id}")
+                                break
+                    
+                    self.logger.info("🔄 Rescore-all operation initiated")
+                    self.logger.info("📊 The scoring function is now processing all snapshots")
+                    
+                    # Show monitoring instructions
+                    self.logger.info("📊 Monitor progress in Google Cloud Console:")
+                    self.logger.info("   • Logging > Logs Explorer")
+                    self.logger.info("   • Query: resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"hubspot-scoring-staging\"")
+                    
+                    self.steps_completed['rescore_all'] = True
+                    return True
+                else:
+                    self.logger.error(f"❌ Pub/Sub command failed")
+                    self.logger.error(f"Exit code: {result.returncode}")
+                    if result.stderr:
+                        self.logger.error(f"Error: {result.stderr}")
+                    return False
+                    
+            except subprocess.CalledProcessError as e:
+                self.logger.error(f"❌ gcloud command failed: {e}")
+                if e.stderr:
+                    self.logger.error(f"Error output: {e.stderr}")
+                if e.stdout:
+                    self.logger.error(f"Standard output: {e.stdout}")
+                return False
+            except Exception as e:
+                self.logger.error(f"❌ Failed to trigger rescore-all: {e}")
+                return False   
     
     def run_single_step(self, step_number: int, **kwargs) -> bool:
         """Run a single step with optional parameters"""

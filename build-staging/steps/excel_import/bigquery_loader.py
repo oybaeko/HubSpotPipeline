@@ -1,11 +1,14 @@
-# src/hubspot_pipeline/excel_import/bigquery_loader.py
+# build-staging/steps/excel_import/bigquery_loader.py
+# UPDATED VERSION - Uses authoritative schemas
+
 import logging
 from typing import Dict, List, Any
 from google.cloud import bigquery
 from google.api_core.exceptions import NotFound
 from datetime import datetime
 
-from .schema import TABLE_SCHEMAS, TABLE_NAMES
+# Import Excel-specific configurations
+from .schema import TABLE_NAMES
 
 def load_to_bigquery(mapped_data: Dict[str, List[Dict]], dry_run: bool = True):
     """Load mapped Excel data to BigQuery tables (companies and deals only)"""
@@ -174,7 +177,7 @@ def _ensure_table_exists(client: bigquery.Client, table_id: str, data_type: str)
     except NotFound:
         logger.info(f"📝 Creating table {table_id}")
         
-        # Get schema definition
+        # Get schema definition from authoritative source
         schema = _get_table_schema(data_type)
         if not schema:
             raise ValueError(f"No schema definition for data type: {data_type}")
@@ -188,12 +191,31 @@ def _ensure_table_exists(client: bigquery.Client, table_id: str, data_type: str)
             logger.debug(f"Schema: {[(f.name, f.field_type) for f in schema]}")
 
 def _get_table_schema(data_type: str) -> List[bigquery.SchemaField]:
-    """Get BigQuery schema for data type from our separate schema file"""
-    if data_type not in TABLE_SCHEMAS:
-        return None
+    """Get BigQuery schema for data type from authoritative source"""
+    logger = logging.getLogger('hubspot.excel_import')
     
-    schema_definition = TABLE_SCHEMAS[data_type]
-    return [bigquery.SchemaField(name, field_type) for name, field_type in schema_definition]
+    try:
+        # Import authoritative schemas
+        from .schema import get_authoritative_schemas
+        auth_schemas = get_authoritative_schemas()
+        
+        if data_type == 'companies':
+            schema_definition = auth_schemas['companies']
+        elif data_type == 'deals':
+            schema_definition = auth_schemas['deals']
+        else:
+            logger.error(f"Unknown data type: {data_type}")
+            return None
+        
+        # Convert from (name, type) tuples to BigQuery SchemaFields
+        schema = [bigquery.SchemaField(name, field_type) for name, field_type in schema_definition]
+        
+        logger.debug(f"Using authoritative schema for {data_type}: {len(schema)} fields")
+        return schema
+        
+    except ImportError as e:
+        logger.error(f"Failed to import authoritative schemas: {e}")
+        return None
 
 def _verify_schema_compatibility(existing_table: bigquery.Table, data_type: str):
     """Verify that existing table schema is compatible with our data"""

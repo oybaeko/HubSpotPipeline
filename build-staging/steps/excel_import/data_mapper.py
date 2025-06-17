@@ -1,15 +1,17 @@
-# File: build-staging/first_stage_data/excel_import/data_mapper.py
-# UPDATED VERSION - Fix to use record_timestamp instead of timestamp
+# File: build-staging/steps/excel_import/data_mapper.py
+# UPDATED VERSION - Uses authoritative schemas + Excel-specific mappings
 
 import pandas as pd
 import logging
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timezone
 
+# Import Excel-specific mappings and configurations
 from .schema import (
     EXCEL_COMPANY_FIELD_MAP, 
     EXCEL_DEAL_FIELD_MAP, 
-    SNAPSHOTS_TO_IMPORT
+    SNAPSHOTS_TO_IMPORT,
+    OWNERS_LOOKUP
 )
 
 def map_excel_to_schema(sheet_data: Dict[str, pd.DataFrame], snapshot_id: str) -> Dict[str, List[Dict]]:
@@ -92,23 +94,39 @@ def _is_deal_sheet(df: pd.DataFrame, sheet_name: str) -> bool:
 
 def _map_company_data(df: pd.DataFrame, snapshot_id: str) -> List[Dict]:
     """
-    Map company data to hs_companies schema
+    Map company data to hs_companies schema using authoritative schema structure
     
     Excel columns -> BigQuery columns based on EXCEL_COMPANY_FIELD_MAP
     """
     logger = logging.getLogger('hubspot.excel_import')
     
+    # Import authoritative schema to ensure we create complete records
+    try:
+        from .schema import get_authoritative_schemas
+        auth_schemas = get_authoritative_schemas()
+        company_schema = auth_schemas['companies']
+        
+        # Get all required fields from authoritative schema (excluding system fields)
+        schema_fields = [field_name for field_name, _ in company_schema 
+                        if field_name not in ['snapshot_id', 'record_timestamp']]
+        
+    except ImportError as e:
+        logger.error(f"Failed to import authoritative schema: {e}")
+        # Fallback to basic fields if import fails
+        schema_fields = ['company_id', 'company_name', 'lifecycle_stage', 'lead_status', 
+                        'hubspot_owner_id', 'company_type']
+    
     mapped_records = []
     
     for idx, row in df.iterrows():
         try:
-            # Build record following hs_companies schema
+            # Build record following authoritative hs_companies schema
             record = {
                 'snapshot_id': snapshot_id,
-                'record_timestamp': datetime.now(timezone.utc),  # ✅ FIXED: Changed from 'timestamp'
+                'record_timestamp': datetime.now(timezone.utc),
             }
             
-            # Map Excel columns to BigQuery columns
+            # Map Excel columns to BigQuery columns using our Excel-specific mapping
             for excel_col, bq_col in EXCEL_COMPANY_FIELD_MAP.items():
                 if bq_col is None:  # Skip metadata fields
                     continue
@@ -116,6 +134,7 @@ def _map_company_data(df: pd.DataFrame, snapshot_id: str) -> List[Dict]:
                 if excel_col in df.columns:
                     value = row[excel_col]
                     
+                    # Apply field-specific transformations
                     if bq_col == 'lifecycle_stage':
                         record[bq_col] = _normalize_lifecycle_stage(value)
                     elif bq_col == 'lead_status':
@@ -131,15 +150,9 @@ def _map_company_data(df: pd.DataFrame, snapshot_id: str) -> List[Dict]:
                     # Column not found in Excel, set to None
                     record[bq_col] = None
             
-            # Set fields not available in Excel to None
-            excel_fields = set(EXCEL_COMPANY_FIELD_MAP.values())
-            schema_fields = [
-                'development_category', 'hiring_developers', 'inhouse_developers',
-                'proff_likviditetsgrad', 'proff_link', 'proff_lonnsomhet', 'proff_soliditet'
-            ]
-            
+            # Ensure all schema fields are present (set missing ones to None)
             for field in schema_fields:
-                if field not in excel_fields:
+                if field not in record:
                     record[field] = None
             
             mapped_records.append(record)
@@ -157,11 +170,27 @@ def _map_company_data(df: pd.DataFrame, snapshot_id: str) -> List[Dict]:
 
 def _map_deal_data(df: pd.DataFrame, snapshot_id: str) -> List[Dict]:
     """
-    Map deal data to hs_deals schema
+    Map deal data to hs_deals schema using authoritative schema structure
     
     Excel columns -> BigQuery columns based on EXCEL_DEAL_FIELD_MAP
     """
     logger = logging.getLogger('hubspot.excel_import')
+    
+    # Import authoritative schema to ensure we create complete records
+    try:
+        from .schema import get_authoritative_schemas
+        auth_schemas = get_authoritative_schemas()
+        deal_schema = auth_schemas['deals']
+        
+        # Get all required fields from authoritative schema (excluding system fields)
+        schema_fields = [field_name for field_name, _ in deal_schema 
+                        if field_name not in ['snapshot_id', 'record_timestamp']]
+        
+    except ImportError as e:
+        logger.error(f"Failed to import authoritative schema: {e}")
+        # Fallback to basic fields if import fails
+        schema_fields = ['deal_id', 'deal_name', 'deal_stage', 'deal_type', 
+                        'amount', 'owner_id', 'associated_company_id']
     
     mapped_records = []
     
@@ -169,10 +198,10 @@ def _map_deal_data(df: pd.DataFrame, snapshot_id: str) -> List[Dict]:
         try:
             record = {
                 'snapshot_id': snapshot_id,
-                'record_timestamp': datetime.now(timezone.utc),  # ✅ FIXED: Changed from 'timestamp'
+                'record_timestamp': datetime.now(timezone.utc),
             }
             
-            # Map Excel columns to BigQuery columns
+            # Map Excel columns to BigQuery columns using our Excel-specific mapping
             for excel_col, bq_col in EXCEL_DEAL_FIELD_MAP.items():
                 if bq_col is None:  # Skip if no mapping
                     continue
@@ -180,6 +209,7 @@ def _map_deal_data(df: pd.DataFrame, snapshot_id: str) -> List[Dict]:
                 if excel_col in df.columns:
                     value = row[excel_col]
                     
+                    # Apply field-specific transformations
                     if bq_col == 'amount':
                         record[bq_col] = _parse_amount(value)
                     elif bq_col in ['deal_id', 'associated_company_id']:
@@ -207,6 +237,11 @@ def _map_deal_data(df: pd.DataFrame, snapshot_id: str) -> List[Dict]:
                             record[bq_col] = _safe_string(value)
                     else:
                         record[bq_col] = None
+            
+            # Ensure all schema fields are present (set missing ones to None)
+            for field in schema_fields:
+                if field not in record:
+                    record[field] = None
             
             mapped_records.append(record)
             
@@ -320,9 +355,6 @@ def _convert_owner_name_to_id(owner_name: str) -> Optional[str]:
     """Convert owner name to owner ID using lookup table"""
     if pd.isna(owner_name) or owner_name is None:
         return None
-    
-    # Import here to avoid circular imports
-    from .schema import OWNERS_LOOKUP
     
     logger = logging.getLogger('hubspot.excel_import')
     
