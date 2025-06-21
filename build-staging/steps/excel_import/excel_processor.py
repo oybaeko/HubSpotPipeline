@@ -1,10 +1,11 @@
 # build-staging/steps/excel_import/excel_processor.py
-# UPDATED VERSION - Uses Excel-specific configuration only
+# UPDATED VERSION - Uses consistent timestamp format without microseconds
 
 import pandas as pd
 import logging
 from typing import Dict, List, Any, Tuple
 from pathlib import Path
+from datetime import datetime, timezone
 
 # Import Excel-specific configuration
 from .schema import SNAPSHOTS_TO_IMPORT
@@ -93,6 +94,17 @@ class ExcelProcessor:
         try:
             all_sheets = pd.read_excel(self.file_path, sheet_name=None, engine='openpyxl')
             self.logger.debug(f"Found {len(all_sheets)} total sheets")
+
+            # In the Excel processing, add after line "Found 25 total sheets":
+            self.logger.info("📋 All sheet names in Excel:")
+            for i, sheet_name in enumerate(all_sheets.keys(), 1):
+                self.logger.info(f"  {i:2}. {sheet_name}")
+
+            self.logger.info("📋 Expected sheet names from config:")
+            for snapshot in SNAPSHOTS_TO_IMPORT:
+                company_sheet = snapshot["company_sheet"]
+                deal_sheet = snapshot["deal_sheet"]
+                self.logger.info(f"  📅 {snapshot['date']}: {company_sheet}, {deal_sheet}")
             
         except Exception as e:
             raise RuntimeError(f"Failed to read Excel file: {e}")

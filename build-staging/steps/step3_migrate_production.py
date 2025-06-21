@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Step 3: Migrate Production Data - CLEAN VERSION
+Step 3: Migrate Production Data - UPDATED VERSION
 Migrates data from production to staging with schema adaptation using authoritative schemas
-Preserves production snapshot dates with canonical time conversion
+Preserves production snapshot dates with canonical time conversion (06:00:00Z)
 """
 
 import sys
@@ -21,9 +21,10 @@ class ProductionMigrationStep:
     
     This step:
     1. Uses authoritative schemas from src/hubspot_pipeline/schema.py
-    2. Preserves production snapshot dates, adds canonical time
+    2. Preserves production snapshot dates, adds canonical time (06:00:00Z)
     3. Migrates data with appropriate field mappings and type conversions
     4. Creates snapshot registry entries for each preserved snapshot
+    5. Uses consistent timestamp format without microseconds
     """
     
     def __init__(self, project_id: str = "hubspot-452402", dataset: str = "Hubspot_staging"):
@@ -41,8 +42,8 @@ class ProductionMigrationStep:
         self.results = {}
         self.completed = False
         
-        # Migration configuration - canonical time to add to production dates
-        self.canonical_time = "04:00:11.000000Z"  # From migration config
+        # UPDATED: Use 06:00:00Z to match Sunday 06:00 CEST snapshot schedule
+        self.canonical_time = "06:00:00Z"
         
     def _setup_environment(self):
         """Setup paths and clear service account credentials"""
@@ -159,25 +160,29 @@ class ProductionMigrationStep:
             return []
     
     def convert_snapshot_to_timestamp(self, snapshot_date: str) -> str:
-        """Convert production snapshot date to full timestamp format with microseconds"""
+        """Convert production snapshot date to Sunday 06:00 UTC format (no microseconds)"""
         try:
-            # Check if it already has the proper microsecond format
-            if snapshot_date.endswith('.000000Z'):
+            # Check if already in correct format (no microseconds)
+            if snapshot_date.endswith('Z') and '.' not in snapshot_date:
                 return snapshot_date
             
-            # If it has 'T' but not microseconds, extract date and time parts
+            # If it has microseconds, remove them
+            if '.' in snapshot_date and snapshot_date.endswith('Z'):
+                base_part = snapshot_date.split('.')[0]
+                return f"{base_part}Z"
+            
+            # If it has 'T' but needs time normalization
             if 'T' in snapshot_date:
-                # Format like "2025-06-08T04:00:05" - needs microseconds added
                 date_part = snapshot_date.split('T')[0]  # "2025-06-08"
-                return f"{date_part}T{self.canonical_time}"  # "2025-06-08T04:00:11.000000Z"
+                return f"{date_part}T{self.canonical_time}"  # "2025-06-08T06:00:00Z"
             else:
                 # It's just a date like "2025-06-08", add the canonical time
-                return f"{snapshot_date}T{self.canonical_time}"
+                return f"{snapshot_date}T{self.canonical_time}"  # "2025-06-08T06:00:00Z"
                 
         except Exception as e:
             self.logger.warning(f"⚠️ Could not convert snapshot date {snapshot_date}: {e}")
-            # Fallback to current time
-            return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            # Fallback to current time without microseconds
+            return datetime.now(timezone.utc).replace(microsecond=0).strftime('%Y-%m-%dT%H:%M:%SZ')
     
     def get_snapshot_count(self, client: bigquery.Client, dataset: str, table: str, snapshot_id: str) -> int:
         """Get record count for a specific snapshot in a table"""
@@ -264,8 +269,9 @@ class ProductionMigrationStep:
             
             for field_name, field_type in target_schema:
                 if field_name == 'snapshot_id':
-                    select_fields.append(f"'{target_snapshot_id}' as snapshot_id")
+                    select_fields.append(f"TIMESTAMP('{target_snapshot_id}') as snapshot_id")
                 elif field_name == 'record_timestamp':
+                    # Use current timestamp WITH microseconds (BigQuery default)
                     select_fields.append('CURRENT_TIMESTAMP() as record_timestamp')
                 elif field_name in prod_fields:
                     # Field exists in production - handle type conversions
@@ -362,6 +368,7 @@ class ProductionMigrationStep:
                 select_fields = []
                 for staging_field in staging_fields:
                     if staging_field == 'record_timestamp':
+                        # Use current timestamp WITH microseconds (BigQuery default)
                         select_fields.append('CURRENT_TIMESTAMP() as record_timestamp')
                     elif staging_field in dev_fields:
                         select_fields.append(staging_field)
@@ -411,6 +418,9 @@ class ProductionMigrationStep:
                                 tables_migrated.append(table_name)
                 
                 if total_records > 0:  # Only create entry if we actually migrated data
+                    # Use current timestamp WITH microseconds for record_timestamp
+                    current_time = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+                    
                     registry_query = f"""
                     INSERT INTO `{self.project_id}.{self.staging_dataset}.hs_snapshot_registry` 
                     (snapshot_id, record_timestamp, triggered_by, status, notes)
@@ -602,13 +612,15 @@ class ProductionMigrationStep:
         print(f"Project: {self.project_id}")
         print(f"Source: {self.prod_dataset}")
         print(f"Target: {self.staging_dataset}")
+        print(f"Canonical Time: {self.canonical_time}")
         print(f"Completed: {'✅' if self.completed else '❌'}")
         
         if self.results:
             print(f"\n📈 RESULTS:")
             print(f"  • Production Snapshots: {len(self.results.get('production_snapshots', []))}")
             for snapshot in self.results.get('production_snapshots', []):
-                print(f"    📅 {snapshot}")
+                converted = self.convert_snapshot_to_timestamp(snapshot)
+                print(f"    📅 {snapshot} → {converted}")
             print(f"  • Dry Run: {self.results.get('dry_run', 'Unknown')}")
             print(f"  • Clear Staging: {self.results.get('clear_staging', 'Unknown')}")
             
@@ -651,6 +663,7 @@ def main():
     print(f"Project: {args.project}")
     print(f"Source: Hubspot_prod")
     print(f"Target: {args.dataset}")
+    print(f"Canonical Time: {step.canonical_time}")
     print(f"Dry run: {args.dry_run}")
     print(f"Clear staging: {args.clear_staging}")
     

@@ -14,8 +14,10 @@ Contains only Excel-specific mappings and configurations.
 
 # Excel snapshot configuration - defines which sheets to import
 SNAPSHOTS_TO_IMPORT = [
+    {"date": "2025-03-12", "company_sheet": "company-2025-03-12", "deal_sheet": "deals-2025-03-12"},
     {"date": "2025-03-21", "company_sheet": "company-2025-03-21", "deal_sheet": "deals-2025-03-21-1"},
     {"date": "2025-03-23", "company_sheet": "company-2025-03-23", "deal_sheet": "deals-2025-03-23"},
+    {"date": "2025-03-30", "company_sheet": "company-2025-03-30", "deal_sheet": "deals-2025-03-30"},
     {"date": "2025-04-04", "company_sheet": "company-2025-04-04", "deal_sheet": "deals-2025-04-04"},
     {"date": "2025-04-06", "company_sheet": "company-2025-04-06", "deal_sheet": "deals-2025-04-06"},
     {"date": "2025-04-14", "company_sheet": "company-2025-04-14", "deal_sheet": "deals-2025-04-14"},

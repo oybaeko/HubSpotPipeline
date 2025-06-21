@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Step 2: Excel Import - SIMPLIFIED (reuses existing modules)
-Uses existing excel_import modules from first_stage_data/
+Step 2: Excel Import - UPDATED VERSION
+Uses existing excel_import modules with consistent timestamp formatting (no microseconds)
 """
 
 import sys
@@ -14,7 +14,7 @@ from typing import Dict, Optional
 import time
 
 class ExcelImportStep:
-    """Simplified Excel import step using existing modules"""
+    """Excel import step using existing modules with consistent timestamp format"""
     
     def __init__(self, project_id: str = "hubspot-452402", dataset: str = "Hubspot_staging"):
         self.project_id = project_id
@@ -229,7 +229,7 @@ class ExcelImportStep:
                 
                 snapshot_date = date_match.group(1)
                 
-                # Get file timestamp
+                # Get file timestamp (UPDATED: no microseconds)
                 timestamp = self._get_file_timestamp(csv_file)
                 
                 # Initialize metadata for this date
@@ -271,14 +271,20 @@ class ExcelImportStep:
             return {}
     
     def _get_file_timestamp(self, file_path: Path) -> str:
-        """Get file modification timestamp in Z format"""
+        """Get file modification timestamp without microseconds (UPDATED)"""
         try:
             mtime = file_path.stat().st_mtime
             dt = datetime.fromtimestamp(mtime, tz=timezone.utc)
-            return dt.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            
+            # Remove microseconds but keep exact time
+            dt_no_microsec = dt.replace(microsecond=0)
+            
+            # Format: YYYY-MM-DDTHH:MM:SSZ (no microseconds)
+            return dt_no_microsec.strftime('%Y-%m-%dT%H:%M:%SZ')
+            
         except Exception:
-            # Fallback to current time
-            return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            # Fallback to current time without microseconds
+            return datetime.now(timezone.utc).replace(microsecond=0).strftime('%Y-%m-%dT%H:%M:%SZ')
     
     def _populate_registry(self, snapshots_data: Dict, crm_metadata: Dict) -> int:
         """Populate snapshot registry for scoring readiness"""
@@ -290,6 +296,7 @@ class ExcelImportStep:
             
             # Create registry entries (table was already truncated in cleanup)
             registry_entries = []
+            # Use current timestamp WITH microseconds for record_timestamp
             current_time = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
             
             for snapshot_id, snapshot_data in snapshots_data.items():
