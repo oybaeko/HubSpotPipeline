@@ -162,7 +162,7 @@ def process_unit_score_for_snapshot(snapshot_id: str):
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id)
+            bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id)
         ],
         destination=f"{project_id}.{dataset_id}.hs_pipeline_units_snapshot",
         write_disposition="WRITE_APPEND",
@@ -180,7 +180,7 @@ def process_unit_score_for_snapshot(snapshot_id: str):
         
         delete_job_config = bigquery.QueryJobConfig(
             query_parameters=[
-                bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id)
+                bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id)
             ]
         )
         
@@ -217,7 +217,7 @@ def process_unit_score_for_snapshot(snapshot_id: str):
             
             count_job_config = bigquery.QueryJobConfig(
                 query_parameters=[
-                    bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id)
+                    bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id)
                 ]
             )
             
@@ -261,7 +261,7 @@ def process_unit_score_for_snapshot(snapshot_id: str):
             
             debug_job_config = bigquery.QueryJobConfig(
                 query_parameters=[
-                    bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id)
+                    bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id)
                 ]
             )
             
@@ -306,7 +306,7 @@ def ensure_score_history_table_exists():
         logger.info(f"📝 Creating score history table {full_table}")
         
         # Import schema from schema.py
-        from ..schema import SCHEMA_PIPELINE_SCORE_HISTORY
+        from hubspot_pipeline.schema import SCHEMA_PIPELINE_SCORE_HISTORY
         
         # Convert schema to BigQuery schema fields
         bq_schema = []
@@ -375,7 +375,7 @@ def process_score_history_for_snapshot(snapshot_id: str):
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id)
+            bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id)
         ],
         destination=f"{project_id}.{dataset_id}.hs_pipeline_score_history",
         write_disposition="WRITE_APPEND",
@@ -392,7 +392,7 @@ def process_score_history_for_snapshot(snapshot_id: str):
         logger.info(f"🗑️ Cleaning existing score history for snapshot: {snapshot_id}")
         delete_job_config = bigquery.QueryJobConfig(
             query_parameters=[
-                bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id)
+                bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id)
             ]
         )
         
@@ -418,7 +418,7 @@ def process_score_history_for_snapshot(snapshot_id: str):
             
             count_job_config = bigquery.QueryJobConfig(
                 query_parameters=[
-                    bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id)
+                    bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id)
                 ]
             )
             
@@ -474,7 +474,7 @@ def debug_snapshot_data(snapshot_id: str) -> dict:
         """
         
         companies_job = client.query(companies_query, job_config=bigquery.QueryJobConfig(
-            query_parameters=[bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id)]
+            query_parameters=[bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id)]
         ))
         companies_result = next(companies_job.result())
         
@@ -497,7 +497,7 @@ def debug_snapshot_data(snapshot_id: str) -> dict:
         """
         
         deals_job = client.query(deals_query, job_config=bigquery.QueryJobConfig(
-            query_parameters=[bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id)]
+            query_parameters=[bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id)]
         ))
         deals_result = next(deals_job.result())
         

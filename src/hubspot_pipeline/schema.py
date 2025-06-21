@@ -28,7 +28,7 @@ SCHEMA_COMPANIES: List[Tuple[str, str]] = [
     ("proff_soliditet",        "STRING"),   # Enum of solidity levels
     # ────────────────────────────────────────────────────────────────────────
 
-    ("snapshot_id",            "STRING"),
+    ("snapshot_id",            "TIMESTAMP"),
     ("record_timestamp",       "TIMESTAMP"),
 ]
 
@@ -68,7 +68,7 @@ SCHEMA_CONTACTS: List[Tuple[str, str]] = [
     ("phone",              "STRING"),
     ("job_title",          "STRING"),
     ("lifecycle_stage",    "STRING"),
-    ("snapshot_id",        "STRING"),  
+    ("snapshot_id",        "TIMESTAMP"),  
     ("record_timestamp",   "TIMESTAMP"),
 ]
 
@@ -120,7 +120,7 @@ SCHEMA_DEALS: List[Tuple[str, str]] = [
     ("amount",                "FLOAT"),
     ("owner_id",              "STRING"),
     ("associated_company_id", "STRING"),
-    ("snapshot_id",           "STRING"),
+    ("snapshot_id",           "TIMESTAMP"),
     ("record_timestamp",      "TIMESTAMP"),
 ]
 
@@ -147,6 +147,7 @@ SCHEMA_DEAL_STAGE_REFERENCE: List[Tuple[str, str]] = [
     ("is_closed",          "BOOLEAN"),
     ("probability",        "FLOAT"),
     ("display_order",      "INTEGER"),
+    ("record_timestamp",   "TIMESTAMP"),
 ]
 
 
@@ -180,7 +181,7 @@ SCHEMA_PIPELINE_UNITS_SNAPSHOT: List[Tuple[str, str]] = [
     ("stage_level",        "INTEGER"),
     ("adjusted_score",     "FLOAT"),
     ("stage_source",       "STRING"),   # "company" or "deal"
-    ("snapshot_id",        "STRING"),
+    ("snapshot_id",        "TIMESTAMP"),
     ("record_timestamp",   "TIMESTAMP"),
 ]
 
@@ -193,7 +194,7 @@ SCHEMA_SNAPSHOT_REGISTRY: List[Tuple[str, str]] = [
     ("triggered_by",       "STRING"),
     ("status",             "STRING"),
     ("notes",              "STRING"),
-    ("snapshot_id",        "STRING"),
+    ("snapshot_id",        "TIMESTAMP"),
     ("record_timestamp",   "TIMESTAMP"),
 ]
 
@@ -207,7 +208,7 @@ SCHEMA_PIPELINE_SCORE_HISTORY: List[Tuple[str, str]] = [
     ("combined_stage",     "STRING"),
     ("num_companies",      "INTEGER"),
     ("total_score",        "FLOAT"),
-    ("snapshot_id",        "STRING"),
+    ("snapshot_id",        "TIMESTAMP"),
     ("record_timestamp",   "TIMESTAMP"),
 ]
 

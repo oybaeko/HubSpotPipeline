@@ -13,15 +13,16 @@ Reference data is replaced completely on each update (no history kept).
 from .main import update_reference_data
 from .fetchers import fetch_owners, fetch_deal_stages
 from .store import replace_owners, replace_deal_stages
-from .schemas import OWNERS_SCHEMA, DEAL_STAGES_SCHEMA, SNAPSHOT_REGISTRY_SCHEMA
+from hubspot_pipeline.schema import SCHEMA_OWNERS, SCHEMA_DEAL_STAGE_REFERENCE, SCHEMA_SNAPSHOT_REGISTRY
 
+# UPDATE __all__:
 __all__ = [
     "update_reference_data",
     "fetch_owners", 
     "fetch_deal_stages",
     "replace_owners",
     "replace_deal_stages", 
-    "OWNERS_SCHEMA",
-    "DEAL_STAGES_SCHEMA",
-    "SNAPSHOT_REGISTRY_SCHEMA",
+    "SCHEMA_OWNERS",           # CHANGED
+    "SCHEMA_DEAL_STAGE_REFERENCE",  # CHANGED
+    "SCHEMA_SNAPSHOT_REGISTRY",     # CHANGED
 ]

@@ -1,4 +1,4 @@
-# src/hubspot_pipeline/hubspot_ingest/registry.py - Updated with consistent record_timestamp
+# src/hubspot_pipeline/hubspot_ingest/registry.py
 
 import logging
 import os
@@ -13,7 +13,7 @@ from hubspot_pipeline.bigquery_utils import (
     get_table_reference,
     ensure_table_exists
 )
-from hubspot_pipeline.hubspot_ingest.reference.schemas import SNAPSHOT_REGISTRY_SCHEMA
+from hubspot_pipeline.schema import SCHEMA_SNAPSHOT_REGISTRY
 
 def ensure_registry_table_exists() -> None:
     """
@@ -33,7 +33,7 @@ def ensure_registry_table_exists() -> None:
         
         # Convert schema to BigQuery schema fields
         bq_schema = []
-        for col_name, col_type in SNAPSHOT_REGISTRY_SCHEMA:
+        for col_name, col_type in SCHEMA_SNAPSHOT_REGISTRY:
             bq_schema.append(bigquery.SchemaField(col_name, col_type))
         
         ensure_table_exists(client, full_table, bq_schema)
@@ -81,7 +81,7 @@ def register_snapshot_start(snapshot_id: str, triggered_by: str = "manual") -> b
                 bigquery.ScalarQueryParameter("triggered_by", "STRING", triggered_by),
                 bigquery.ScalarQueryParameter("status", "STRING", "started"),
                 bigquery.ScalarQueryParameter("notes", "STRING", "Snapshot process initiated"),
-                bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id),
+                bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id),
             ]
         )
         
@@ -95,16 +95,6 @@ def register_snapshot_start(snapshot_id: str, triggered_by: str = "manual") -> b
         logger.error(f"❌ Exception registering snapshot start: {e}")
         return False
 
-# Changes needed in src/hubspot_pipeline/hubspot_ingest/registry.py
-
-def register_snapshot_start(snapshot_id: str, triggered_by: str = "manual") -> bool:
-    """
-    Register the start of a snapshot process - NO CHANGES NEEDED
-    This one already uses "started" status correctly
-    """
-    # ... existing code is already correct ...
-    # status = "started" ✅
-    pass
 
 def register_snapshot_ingest_complete(snapshot_id: str, data_counts: Dict[str, int], 
                                     reference_counts: Dict[str, int]) -> bool:
@@ -142,9 +132,9 @@ def register_snapshot_ingest_complete(snapshot_id: str, data_counts: Dict[str, i
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter("triggered_by", "STRING", "ingest_completion"),
-                bigquery.ScalarQueryParameter("status", "STRING", "completed"),  # CHANGED
+                bigquery.ScalarQueryParameter("status", "STRING", "completed"),
                 bigquery.ScalarQueryParameter("notes", "STRING", notes),
-                bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id),
+                bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id),
             ]
         )
         
@@ -196,9 +186,9 @@ def register_snapshot_failure(snapshot_id: str, error_message: str) -> bool:
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter("triggered_by", "STRING", "ingest_failure"),
-                bigquery.ScalarQueryParameter("status", "STRING", "failed"),  # CHANGED
+                bigquery.ScalarQueryParameter("status", "STRING", "failed"),
                 bigquery.ScalarQueryParameter("notes", "STRING", f"Ingest failed: {error_message}"),
-                bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id),
+                bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id),
             ]
         )
         
@@ -211,6 +201,7 @@ def register_snapshot_failure(snapshot_id: str, error_message: str) -> bool:
     except Exception as e:
         logger.error(f"❌ Failed to register ingest failure: {e}")
         return False
+
 
 def update_snapshot_status(snapshot_id: str, status: str, notes: Optional[str] = None) -> bool:
     """
@@ -242,7 +233,7 @@ def update_snapshot_status(snapshot_id: str, status: str, notes: Optional[str] =
             
             job_config = bigquery.QueryJobConfig(
                 query_parameters=[
-                    bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id),
+                    bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id),
                     bigquery.ScalarQueryParameter("status", "STRING", status),
                     bigquery.ScalarQueryParameter("notes", "STRING", notes)
                 ]
@@ -256,7 +247,7 @@ def update_snapshot_status(snapshot_id: str, status: str, notes: Optional[str] =
             
             job_config = bigquery.QueryJobConfig(
                 query_parameters=[
-                    bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id),
+                    bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id),
                     bigquery.ScalarQueryParameter("status", "STRING", status)
                 ]
             )
@@ -277,7 +268,7 @@ def get_latest_snapshot(status_filter: Optional[str] = None) -> Optional[Dict[st
     Get the latest snapshot from the registry.
     
     Args:
-        status_filter: Optional status to filter by (e.g., "ingest_completed")
+        status_filter: Optional status to filter by (e.g., "completed")
         
     Returns:
         Dictionary with snapshot info or None if not found
@@ -314,8 +305,11 @@ def get_latest_snapshot(status_filter: Optional[str] = None) -> Optional[Dict[st
         latest = next(result, None)
         
         if latest:
+            # Convert snapshot_id back to string format for consistency
+            snapshot_id_str = latest.snapshot_id.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(latest.snapshot_id, 'strftime') else str(latest.snapshot_id)
+            
             return {
-                'snapshot_id': latest.snapshot_id,
+                'snapshot_id': snapshot_id_str,
                 'record_timestamp': latest.record_timestamp,
                 'triggered_by': latest.triggered_by,
                 'status': latest.status,

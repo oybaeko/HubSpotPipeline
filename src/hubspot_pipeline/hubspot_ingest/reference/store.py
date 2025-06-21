@@ -4,7 +4,7 @@ import logging
 import os
 from typing import List, Dict, Any, Tuple
 from google.cloud import bigquery
-
+from hubspot_pipeline.schema import SCHEMA_OWNERS, SCHEMA_DEAL_STAGE_REFERENCE
 # Import our updated BigQuery utilities
 from hubspot_pipeline.bigquery_utils import (
     get_bigquery_client,
@@ -108,8 +108,7 @@ def replace_owners(owners_data: List[Dict[str, Any]]) -> int:
     Returns:
         Number of owners inserted
     """
-    from hubspot_pipeline.hubspot_ingest.reference.schemas import OWNERS_SCHEMA
-    return replace_reference_table(owners_data, "hs_owners", OWNERS_SCHEMA)
+    return replace_reference_table(owners_data, "hs_owners", SCHEMA_OWNERS)
 
 
 def replace_deal_stages(stages_data: List[Dict[str, Any]]) -> int:
@@ -122,5 +121,4 @@ def replace_deal_stages(stages_data: List[Dict[str, Any]]) -> int:
     Returns:
         Number of stages inserted
     """
-    from hubspot_pipeline.hubspot_ingest.reference.schemas import DEAL_STAGES_SCHEMA
-    return replace_reference_table(stages_data, "hs_deal_stage_reference", DEAL_STAGES_SCHEMA)
+    return replace_reference_table(stages_data, "hs_deal_stage_reference", SCHEMA_DEAL_STAGE_REFERENCE)

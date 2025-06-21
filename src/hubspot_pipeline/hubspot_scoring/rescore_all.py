@@ -20,6 +20,7 @@ def get_all_snapshots_from_registry() -> List[str]:
         project_id = os.getenv('BIGQUERY_PROJECT_ID')
         dataset_id = os.getenv('BIGQUERY_DATASET_ID')
         
+        # Query is fine as-is since snapshot_id is now TIMESTAMP and ORDER BY will work correctly
         query = f"""
         SELECT snapshot_id
         FROM `{project_id}.{dataset_id}.hs_snapshot_registry`
@@ -31,7 +32,8 @@ def get_all_snapshots_from_registry() -> List[str]:
         job = client.query(query)
         results = job.result()
         
-        snapshots = [row.snapshot_id for row in results]
+        # Note: snapshot_id will be returned as datetime objects now, may need conversion
+        snapshots = [row.snapshot_id.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(row.snapshot_id, 'strftime') else str(row.snapshot_id) for row in results]
         logger.info(f"📊 Discovered {len(snapshots)} snapshots for rescoring")
         
         return snapshots
@@ -39,6 +41,7 @@ def get_all_snapshots_from_registry() -> List[str]:
     except Exception as e:
         logger.error(f"❌ Failed to get snapshots from registry: {e}")
         raise RuntimeError(f"Failed to discover snapshots: {e}")
+
 
 def handle_rescore_all_complete() -> Dict[str, Any]:
     """

@@ -349,7 +349,7 @@ def clean_data_tables(table_type, env_info):
         return False
 
 def get_latest_snapshot_id():
-    """Get the latest snapshot ID from the registry using consistent field names"""
+    """Get the latest snapshot ID from the registry using TIMESTAMP parameters"""
     try:
         from google.cloud import bigquery
         import os
@@ -358,10 +358,11 @@ def get_latest_snapshot_id():
         project_id = os.getenv('BIGQUERY_PROJECT_ID')
         dataset_id = os.getenv('BIGQUERY_DATASET_ID')
         
+        # Updated query to look for completed ingest status and handle TIMESTAMP return
         query = f"""
         SELECT snapshot_id
         FROM `{project_id}.{dataset_id}.hs_snapshot_registry`
-        WHERE status LIKE '%ingest%'
+        WHERE status = 'completed' AND triggered_by = 'ingest_completion'
         ORDER BY record_timestamp DESC
         LIMIT 1
         """
@@ -369,12 +370,20 @@ def get_latest_snapshot_id():
         result = client.query(query).result()
         latest = next(result, None)
         
-        return latest.snapshot_id if latest else None
+        if latest:
+            # Convert TIMESTAMP back to string format for API consistency
+            if hasattr(latest.snapshot_id, 'strftime'):
+                return latest.snapshot_id.strftime("%Y-%m-%dT%H:%M:%SZ")
+            else:
+                return str(latest.snapshot_id)
+        
+        return None
         
     except Exception as e:
         print(f"❌ Failed to get latest snapshot: {e}")
+        print(f"💡 Debug info: project={os.getenv('BIGQUERY_PROJECT_ID')}, dataset={os.getenv('BIGQUERY_DATASET_ID')}")
         return None
-
+    
 def view_recent_snapshots(env_info):
     """View recent snapshots from registry"""
     print("\n📋 Recent Snapshots")

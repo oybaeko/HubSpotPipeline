@@ -6,10 +6,6 @@ from datetime import datetime
 from typing import Optional
 from google.cloud import bigquery
 
-# Changes needed in src/hubspot_pipeline/hubspot_scoring/registry.py
-
-# Changes needed in src/hubspot_pipeline/hubspot_scoring/registry.py
-
 def register_scoring_start(snapshot_id: str) -> bool:
     """
     Register scoring start in snapshot registry
@@ -31,7 +27,7 @@ def register_scoring_start(snapshot_id: str) -> bool:
         """
         
         delete_job_config = bigquery.QueryJobConfig(
-            query_parameters=[bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id)]
+            query_parameters=[bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id)]
         )
         
         try:
@@ -59,9 +55,9 @@ def register_scoring_start(snapshot_id: str) -> bool:
         
         insert_job_config = bigquery.QueryJobConfig(
             query_parameters=[
-                bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id),
+                bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id),
                 bigquery.ScalarQueryParameter("triggered_by", "STRING", "scoring_start"),
-                bigquery.ScalarQueryParameter("status", "STRING", "started"),  # CHANGED
+                bigquery.ScalarQueryParameter("status", "STRING", "started"),
                 bigquery.ScalarQueryParameter("notes", "STRING", "Scoring process initiated"),
             ]
         )
@@ -111,9 +107,9 @@ def register_scoring_completion(snapshot_id: str, processed_records: int, notes:
         
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
-                bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id),
+                bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id),
                 bigquery.ScalarQueryParameter("triggered_by", "STRING", "scoring_completion"),
-                bigquery.ScalarQueryParameter("status", "STRING", "completed"),  # CHANGED
+                bigquery.ScalarQueryParameter("status", "STRING", "completed"),
                 bigquery.ScalarQueryParameter("notes", "STRING", completion_notes),
             ]
         )
@@ -148,71 +144,8 @@ def register_scoring_failure(snapshot_id: str, error_message: str) -> bool:
         dataset_id = os.getenv('BIGQUERY_DATASET_ID')
         table_ref = f"{project_id}.{dataset_id}.hs_snapshot_registry"
         
-        # Insert new record for scoring failure
-        insert_query = f"""
-        INSERT INTO `{table_ref}` (
-            snapshot_id,
-            record_timestamp,
-            triggered_by,
-            status,
-            notes
-        ) VALUES (
-            @snapshot_id,
-            CURRENT_TIMESTAMP(),
-            @triggered_by,
-            @status,
-            @notes
-        )
-        """
-        
-        insert_job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id),
-                bigquery.ScalarQueryParameter("triggered_by", "STRING", "scoring_failure"),
-                bigquery.ScalarQueryParameter("status", "STRING", "failed"),  # CHANGED
-                bigquery.ScalarQueryParameter("notes", "STRING", f"Scoring failed: {error_message}"),
-            ]
-        )
-        
-        insert_job = client.query(insert_query, job_config=insert_job_config)
-        insert_job.result()
-        
-        logger.info(f"✅ Registered scoring failure for snapshot {snapshot_id}")
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ Failed to register scoring failure: {e}")
-        return False
-    """
-    Register scoring failure in snapshot registry
-    Previous scoring events for this snapshot should have been cleaned by register_scoring_start,
-    but we'll add a safety clean here in case of unexpected failures
-    
-    Args:
-        snapshot_id: The snapshot identifier
-        error_message: Description of the error
-        
-    Returns:
-        True if successful, False otherwise
-    """
-    logger = logging.getLogger('hubspot.scoring.registry')
-    
-    try:
-        client = bigquery.Client()
-        
-        # Get config
-        project_id = os.getenv('BIGQUERY_PROJECT_ID')
-        dataset_id = os.getenv('BIGQUERY_DATASET_ID')
-        
-        if not project_id or not dataset_id:
-            logger.error("Missing BigQuery configuration")
-            return False
-        
-        table_ref = f"{project_id}.{dataset_id}.hs_snapshot_registry"
-        
         # Safety clean: Try to delete any previous scoring events for this snapshot
         # (in case failure happened before register_scoring_start)
-        # Handle the case where table doesn't exist gracefully
         delete_query = f"""
         DELETE FROM `{table_ref}`
         WHERE snapshot_id = @snapshot_id
@@ -222,7 +155,7 @@ def register_scoring_failure(snapshot_id: str, error_message: str) -> bool:
         logger.debug(f"🗑️ Safety clean of scoring events for failed snapshot: {snapshot_id}")
         delete_job_config = bigquery.QueryJobConfig(
             query_parameters=[
-                bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id)
+                bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id)
             ]
         )
         
@@ -253,9 +186,9 @@ def register_scoring_failure(snapshot_id: str, error_message: str) -> bool:
         
         insert_job_config = bigquery.QueryJobConfig(
             query_parameters=[
-                bigquery.ScalarQueryParameter("snapshot_id", "STRING", snapshot_id),
+                bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id),
                 bigquery.ScalarQueryParameter("triggered_by", "STRING", "scoring_failure"),
-                bigquery.ScalarQueryParameter("status", "STRING", "scoring_failed"),
+                bigquery.ScalarQueryParameter("status", "STRING", "failed"),
                 bigquery.ScalarQueryParameter("notes", "STRING", f"Scoring failed: {error_message}"),
             ]
         )
