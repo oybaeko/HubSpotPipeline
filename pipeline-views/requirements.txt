@@ -1,0 +1,7 @@
+# BigQuery Views Deployment Tool Requirements
+
+# Core Google Cloud dependencies
+google-cloud-bigquery>=3.11.0
+
+# Optional: For enhanced logging and formatting
+colorama>=0.4.6
