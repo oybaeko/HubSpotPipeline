@@ -1,9 +1,7 @@
-#!/usr/bin/env python3
-"""
-Step 3: Migrate Production Data - UPDATED VERSION
-Migrates data from production to staging with schema adaptation using authoritative schemas
-Preserves production snapshot dates with canonical time conversion (06:00:00Z)
-"""
+# File: build-staging/steps/step3_migrate_production.py
+# Step 3: Migrate Production Data - UPDATED VERSION with NORMALIZATION FIXES
+# Migrates data from production to staging with schema adaptation using authoritative schemas
+# Preserves production snapshot dates with canonical time conversion (06:00:00Z)
 
 import sys
 import os
@@ -23,8 +21,9 @@ class ProductionMigrationStep:
     1. Uses authoritative schemas from src/hubspot_pipeline/schema.py
     2. Preserves production snapshot dates, adds canonical time (06:00:00Z)
     3. Migrates data with appropriate field mappings and type conversions
-    4. Creates snapshot registry entries for each preserved snapshot
-    5. Uses consistent timestamp format without microseconds
+    4. APPLIES NORMALIZATION FIXES during migration
+    5. Creates snapshot registry entries for each preserved snapshot
+    6. Uses consistent timestamp format without microseconds
     """
     
     def __init__(self, project_id: str = "hubspot-452402", dataset: str = "Hubspot_staging"):
@@ -254,7 +253,7 @@ class ProductionMigrationStep:
     
     def build_migration_query(self, table_name: str, data_type: str, schema_analysis: Dict, 
                              prod_snapshot_id: str, target_snapshot_id: str) -> Optional[str]:
-        """Build migration query for a specific snapshot with schema adaptation"""
+        """Build migration query for a specific snapshot with schema adaptation and NORMALIZATION FIXES"""
         try:
             # Get authoritative schema for target structure
             auth_schemas = schema_analysis['authoritative_schemas']
@@ -264,7 +263,9 @@ class ProductionMigrationStep:
             comparison = schema_analysis[data_type]
             prod_fields = {f['name']: f for f in comparison['schemas'].get('prod', [])} if comparison['schemas'].get('prod') else {}
             
-            # Build field mappings based on authoritative schema
+            self.logger.info(f"🔄 Building migration query with normalization for {table_name}")
+            
+            # Build field mappings based on authoritative schema with NORMALIZATION
             select_fields = []
             
             for field_name, field_type in target_schema:
@@ -274,9 +275,10 @@ class ProductionMigrationStep:
                     # Use current timestamp WITH microseconds (BigQuery default)
                     select_fields.append('CURRENT_TIMESTAMP() as record_timestamp')
                 elif field_name in prod_fields:
-                    # Field exists in production - handle type conversions
+                    # Field exists in production - handle type conversions + NORMALIZATION
                     prod_field = prod_fields[field_name]
                     
+                    # Apply normalization based on field type and name
                     if field_name == 'amount' and data_type == 'deals':
                         # Convert STRING to FLOAT for deals amount
                         if prod_field['type'] == 'STRING' and field_type == 'FLOAT':
@@ -286,8 +288,22 @@ class ProductionMigrationStep:
                     elif field_name in ['company_id', 'deal_id'] and prod_field['type'] in ['INTEGER', 'INT64']:
                         # Convert numeric IDs to STRING
                         select_fields.append(f'CAST({field_name} AS STRING) as {field_name}')
+                    elif field_name in ['hubspot_owner_id', 'owner_id', 'associated_company_id']:
+                        # REFERENCE FIELDS: Convert empty strings to NULL
+                        select_fields.append(f'NULLIF({field_name}, "") as {field_name}')
+                    elif field_name in ['lifecycle_stage', 'lead_status', 'company_type', 'development_category', 
+                                       'hiring_developers', 'inhouse_developers', 'proff_likviditetsgrad', 
+                                       'proff_lonnsomhet', 'proff_soliditet', 'deal_stage', 'deal_type']:
+                        # ENUM/STATUS FIELDS: Convert to lowercase for consistent enum handling
+                        select_fields.append(f'LOWER(TRIM({field_name})) as {field_name}')
+                    elif field_name == 'email':
+                        # EMAIL FIELDS: Convert to lowercase
+                        select_fields.append(f'LOWER(TRIM({field_name})) as {field_name}')
+                    elif field_name == 'proff_link':
+                        # URL FIELDS: Convert to lowercase for consistent domain matching
+                        select_fields.append(f'LOWER(TRIM({field_name})) as {field_name}')
                     else:
-                        # Direct mapping
+                        # Direct mapping for other fields
                         select_fields.append(field_name)
                 else:
                     # Field doesn't exist in production - set to NULL
@@ -301,6 +317,12 @@ class ProductionMigrationStep:
             FROM `{self.project_id}.{self.prod_dataset}.{table_name}`
             WHERE snapshot_id = '{prod_snapshot_id}'
             """
+            
+            self.logger.info(f"✅ Built migration query with normalization for {len(select_fields)} fields")
+            self.logger.debug(f"Sample normalizations applied:")
+            normalization_examples = [f for f in select_fields if any(func in f for func in ['LOWER', 'NULLIF', 'TRIM'])]
+            for example in normalization_examples[:3]:
+                self.logger.debug(f"  • {example}")
             
             return query
             
@@ -364,14 +386,22 @@ class ProductionMigrationStep:
                 
                 self.logger.info(f"📊 {table}: staging({len(staging_fields)}) vs dev({len(dev_fields)}) fields")
                 
-                # Build field mapping
+                # Build field mapping with NORMALIZATION for reference data
                 select_fields = []
                 for staging_field in staging_fields:
                     if staging_field == 'record_timestamp':
                         # Use current timestamp WITH microseconds (BigQuery default)
                         select_fields.append('CURRENT_TIMESTAMP() as record_timestamp')
                     elif staging_field in dev_fields:
-                        select_fields.append(staging_field)
+                        # Apply normalization to reference data too
+                        if staging_field == 'email':
+                            # EMAIL FIELDS: Convert to lowercase
+                            select_fields.append(f'LOWER(TRIM({staging_field})) as {staging_field}')
+                        elif staging_field in ['owner_id']:
+                            # REFERENCE FIELDS: Convert empty strings to NULL
+                            select_fields.append(f'NULLIF({staging_field}, "") as {staging_field}')
+                        else:
+                            select_fields.append(staging_field)
                     else:
                         select_fields.append(f'NULL as {staging_field}')
                 
@@ -379,7 +409,7 @@ class ProductionMigrationStep:
                 clear_query = f"TRUNCATE TABLE `{self.project_id}.{self.staging_dataset}.{table}`"
                 client.query(clear_query).result()
                 
-                # Copy with schema-aware field mapping
+                # Copy with schema-aware field mapping and normalization
                 copy_query = f"""
                 INSERT INTO `{self.project_id}.{self.staging_dataset}.{table}` 
                 SELECT 
@@ -394,7 +424,7 @@ class ProductionMigrationStep:
                 result = client.query(count_query).result()
                 
                 for row in result:
-                    self.logger.info(f"✅ Copied {table}: {row.count} records")
+                    self.logger.info(f"✅ Copied {table}: {row.count} records (with normalization)")
                     break
                     
             except Exception as e:
@@ -429,7 +459,7 @@ class ProductionMigrationStep:
                         CURRENT_TIMESTAMP(),
                         'production_migration_step3',
                         'completed',
-                        'Migrated from production snapshot {prod_snapshot_id} | Tables: {", ".join(tables_migrated)} | Records: {total_records:,}'
+                        'Migrated from production snapshot {prod_snapshot_id} with normalization | Tables: {", ".join(tables_migrated)} | Records: {total_records:,}'
                     )
                     """
                     
@@ -440,8 +470,8 @@ class ProductionMigrationStep:
             self.logger.warning(f"⚠️ Failed to create registry entries: {e}")
     
     def execute(self, dry_run: bool = True, clear_staging: bool = False, clear_all: bool = False) -> bool:
-        """Execute production migration with snapshot preservation"""
-        self.logger.info(f"🚀 STEP 3: Migrating production data (dry_run={dry_run})")
+        """Execute production migration with snapshot preservation and normalization"""
+        self.logger.info(f"🚀 STEP 3: Migrating production data with normalization (dry_run={dry_run})")
         
         if clear_all:
             self.logger.warning("⚠️ CLEAR ALL mode enabled - will remove Excel import data too!")
@@ -449,6 +479,12 @@ class ProductionMigrationStep:
             self.logger.info("🔄 Clear mode: Only previous production migration data")
         else:
             self.logger.info("🔄 Clear mode: None (will add to existing data)")
+        
+        self.logger.info("🔧 NORMALIZATION FIXES will be applied:")
+        self.logger.info("  • Email fields → lowercase")
+        self.logger.info("  • Enum/status fields → lowercase")
+        self.logger.info("  • Reference fields → empty strings converted to NULL")
+        self.logger.info("  • URL fields → lowercase domains")
         
         try:
             # Validate prerequisites
@@ -475,7 +511,7 @@ class ProductionMigrationStep:
             migration_results = {}
             
             for table_name in tables_to_migrate:
-                self.logger.info(f"📦 Migrating {table_name}")
+                self.logger.info(f"📦 Migrating {table_name} with normalization")
                 
                 # Get data type for schema lookup
                 data_type = table_name.replace('hs_', '')
@@ -505,7 +541,7 @@ class ProductionMigrationStep:
                     
                     self.logger.info(f"  📸 Snapshot {prod_snapshot_id}: {snapshot_count:,} records → {target_snapshot_id}")
                     
-                    # Build migration query for this specific snapshot
+                    # Build migration query for this specific snapshot with normalization
                     migration_query = self.build_migration_query(
                         table_name, 
                         data_type, 
@@ -520,9 +556,9 @@ class ProductionMigrationStep:
                     
                     # Execute migration for this snapshot
                     if dry_run:
-                        self.logger.info(f"    🧪 DRY RUN: Would migrate {snapshot_count:,} records")
+                        self.logger.info(f"    🧪 DRY RUN: Would migrate {snapshot_count:,} records with normalization")
                         if self.validate_query(client, migration_query):
-                            self.logger.info(f"    ✅ Migration query validated")
+                            self.logger.info(f"    ✅ Migration query validated (includes normalization)")
                             table_migration_results.append({'snapshot': prod_snapshot_id, 'validated': True, 'count': snapshot_count})
                         else:
                             self.logger.error(f"    ❌ Migration query validation failed")
@@ -530,7 +566,7 @@ class ProductionMigrationStep:
                     else:
                         migrated_count = self.execute_migration_query(client, migration_query, target_snapshot_id, table_name)
                         if migrated_count is not None:
-                            self.logger.info(f"    ✅ Migrated snapshot {prod_snapshot_id}: {migrated_count:,} records")
+                            self.logger.info(f"    ✅ Migrated snapshot {prod_snapshot_id}: {migrated_count:,} records (normalized)")
                             table_migration_results.append({'snapshot': prod_snapshot_id, 'migrated': True, 'count': migrated_count})
                         else:
                             self.logger.error(f"    ❌ Migration failed for snapshot {prod_snapshot_id}")
@@ -552,7 +588,7 @@ class ProductionMigrationStep:
             if not dry_run and migration_results:
                 self.create_registry_entries(client, migration_results, production_snapshots)
             
-            # Copy reference data if not dry run
+            # Copy reference data if not dry run (also applies normalization)
             if not dry_run:
                 self.copy_reference_data(client)
             
@@ -563,7 +599,8 @@ class ProductionMigrationStep:
                 'dry_run': dry_run,
                 'clear_staging': clear_staging,
                 'clear_all': clear_all,
-                'schema_analysis': schema_analysis
+                'schema_analysis': schema_analysis,
+                'normalization_applied': True
             }
             
             # Determine success
@@ -583,10 +620,11 @@ class ProductionMigrationStep:
             
             if success:
                 self.completed = True
-                self.logger.info("✅ Production migration completed successfully")
+                self.logger.info("✅ Production migration completed successfully with normalization")
                 if not dry_run:
                     production_snapshots = self.results.get('production_snapshots', [])
                     self.logger.info(f"📸 Production snapshots migrated: {len(production_snapshots)}")
+                    self.logger.info("🔧 Data normalization applied: emails→lowercase, enums→lowercase, empty strings→NULL")
                 return True
             else:
                 self.logger.error("❌ Production migration failed")
@@ -613,6 +651,7 @@ class ProductionMigrationStep:
         print(f"Source: {self.prod_dataset}")
         print(f"Target: {self.staging_dataset}")
         print(f"Canonical Time: {self.canonical_time}")
+        print(f"Normalization: {'✅ Applied' if self.results.get('normalization_applied') else '❌ Not applied'}")
         print(f"Completed: {'✅' if self.completed else '❌'}")
         
         if self.results:
@@ -623,6 +662,13 @@ class ProductionMigrationStep:
                 print(f"    📅 {snapshot} → {converted}")
             print(f"  • Dry Run: {self.results.get('dry_run', 'Unknown')}")
             print(f"  • Clear Staging: {self.results.get('clear_staging', 'Unknown')}")
+            
+            if self.results.get('normalization_applied'):
+                print(f"  • Normalization Applied:")
+                print(f"    🔤 Email fields → lowercase")
+                print(f"    🏷️ Enum/status fields → lowercase")  
+                print(f"    🔗 Reference fields → empty strings to NULL")
+                print(f"    🌐 URL fields → lowercase domains")
             
             tables_migrated = self.results.get('tables_migrated', {})
             if tables_migrated:
@@ -637,7 +683,7 @@ class ProductionMigrationStep:
 
 def main():
     """Main CLI entry point"""
-    parser = argparse.ArgumentParser(description="Production Migration Step")
+    parser = argparse.ArgumentParser(description="Production Migration Step with Normalization")
     parser.add_argument('--project', default='hubspot-452402', help='BigQuery project')
     parser.add_argument('--dataset', default='Hubspot_staging', help='Staging dataset')
     parser.add_argument('--dry-run', action='store_true', help='Preview migration only')
@@ -659,13 +705,14 @@ def main():
     # Create migration step
     step = ProductionMigrationStep(args.project, args.dataset)
     
-    print(f"🚀 Production Migration Step")
+    print(f"🚀 Production Migration Step with Normalization")
     print(f"Project: {args.project}")
     print(f"Source: Hubspot_prod")
     print(f"Target: {args.dataset}")
     print(f"Canonical Time: {step.canonical_time}")
     print(f"Dry run: {args.dry_run}")
     print(f"Clear staging: {args.clear_staging}")
+    print(f"Normalization: ✅ Enabled (emails, enums, references, URLs)")
     
     # Check prerequisites only
     if args.check_prereqs:
@@ -697,7 +744,7 @@ def main():
         )
         
         if success:
-            print(f"\n✅ Production migration completed!")
+            print(f"\n✅ Production migration with normalization completed!")
             step.show_status()
             return 0
         else:

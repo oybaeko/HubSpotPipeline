@@ -1,0 +1,18 @@
+📋 Logging to sync_log_220625_094831.txt
+[0;31m⚠️  THIS WILL BACK UP, DELETE TABLES + VIEWS, AND OVERWRITE 'Hubspot_prod' FROM 'Hubspot_staging'[0m
+Backup will be created as: Hubspot_prod_220625_094831
+
+📍 Detected region: EU
+📦 Creating backup dataset: Hubspot_prod_220625_094831
+Dataset 'hubspot-452402:Hubspot_prod_220625_094831' successfully created.
+🔄 Backing up: hs_companies
+Waiting on bqjob_r4236837ab7f8db60_0000019794e4f1ef_1 ... (0s) Current status: RUNNING                                                                                      Waiting on bqjob_r4236837ab7f8db60_0000019794e4f1ef_1 ... (0s) Current status: DONE   
+Table 'hubspot-452402:Hubspot_prod.hs_companies' successfully copied to 'hubspot-452402:Hubspot_prod_220625_094831.hs_companies'
+🔄 Backing up: hs_deals
+Waiting on bqjob_r2d2651bc75d4912f_0000019794e50b5a_1 ... (0s) Current status: RUNNING                                                                                      Waiting on bqjob_r2d2651bc75d4912f_0000019794e50b5a_1 ... (0s) Current status: DONE   
+Table 'hubspot-452402:Hubspot_prod.hs_deals' successfully copied to 'hubspot-452402:Hubspot_prod_220625_094831.hs_deals'
+🔍 Validating table backups (row count + schema)...
+✅ hs_companies: Backup valid
+✅ hs_deals: Backup valid
+[0;32m✅ Backup passed all checks: Hubspot_prod_220625_094831[0m
+

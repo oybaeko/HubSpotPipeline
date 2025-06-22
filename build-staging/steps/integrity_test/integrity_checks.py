@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Core integrity checking logic - FIXED VERSION
+Core integrity checking logic - UPDATED VERSION with lowercase normalization
 """
 
 import logging
@@ -10,7 +10,8 @@ from google.cloud import bigquery
 from models import IntegrityIssue
 from config import (
     REFERENCE_RELATIONSHIPS, REQUIRED_FIELDS, FORMAT_VALIDATIONS,
-    TABLES_TO_CHECK, UNIQUE_CONSTRAINTS, EMAIL_TABLES, DATA_TABLES
+    TABLES_TO_CHECK, UNIQUE_CONSTRAINTS, EMAIL_TABLES, DATA_TABLES,
+    LOWERCASE_NORMALIZATION_FIELDS
 )
 
 class IntegrityChecker:
@@ -285,6 +286,68 @@ class IntegrityChecker:
                     
             except Exception as e:
                 self.logger.warning(f"⚠️ Could not check email format for {table}.{field}: {e}")
+        
+        return issues
+    
+    def check_lowercase_normalization(self, client: bigquery.Client) -> List[IntegrityIssue]:
+        """NEW: Check for fields that should be lowercase normalized"""
+        self.logger.info("🔤 Checking lowercase normalization...")
+        issues = []
+        
+        for table, fields in LOWERCASE_NORMALIZATION_FIELDS.items():
+            try:
+                table_ref = f"{self.project_id}.{self.dataset}.{table}"
+                
+                # Check if table exists
+                try:
+                    client.get_table(table_ref)
+                except Exception as e:
+                    if "not found" in str(e).lower():
+                        self.logger.info(f"ℹ️ Table {table} not found, skipping lowercase normalization")
+                        continue
+                    else:
+                        raise
+                
+                for field, description in fields.items():
+                    # Check for values that are not lowercase
+                    mixed_case_query = f"""
+                    SELECT COUNT(*) as count
+                    FROM `{table_ref}`
+                    WHERE {field} IS NOT NULL 
+                      AND {field} != ''
+                      AND {field} != LOWER({field})
+                    """
+                    
+                    result = client.query(mixed_case_query).result()
+                    for row in result:
+                        if row.count > 0:
+                            # Get sample mixed case values
+                            sample_query = f"""
+                            SELECT DISTINCT {field}
+                            FROM `{table_ref}`
+                            WHERE {field} IS NOT NULL 
+                              AND {field} != ''
+                              AND {field} != LOWER({field})
+                            LIMIT 5
+                            """
+                            
+                            sample_result = client.query(sample_query).result()
+                            sample_values = [getattr(sample_row, field) for sample_row in sample_result]
+                            
+                            issues.append(IntegrityIssue(
+                                table=table,
+                                field=field,
+                                issue_type='case_normalization',
+                                count=row.count,
+                                severity='warning',
+                                description=description,
+                                sample_values=sample_values
+                            ))
+                            self.logger.warning(f"⚠️ {table}.{field}: {row.count} records not lowercase normalized")
+                        break
+                        
+            except Exception as e:
+                self.logger.warning(f"⚠️ Could not check lowercase normalization for {table}: {e}")
         
         return issues
     

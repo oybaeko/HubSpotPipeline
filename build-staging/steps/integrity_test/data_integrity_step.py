@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Main data integrity verification step - FIXED VERSION
+Main data integrity verification step - UPDATED VERSION with lowercase normalization
 """
 
 import os
@@ -24,7 +24,8 @@ class DataIntegrityStep:
     3. Identifies orphaned records
     4. Checks for blank/empty reference fields
     5. Validates snapshot consistency
-    6. Generates comprehensive integrity report
+    6. Checks lowercase normalization for consistent filtering
+    7. Generates comprehensive integrity report
     """
     
     def __init__(self, project_id: str = "hubspot-452402", dataset: str = "Hubspot_staging"):
@@ -162,15 +163,19 @@ class DataIntegrityStep:
             format_issues = self.checker.check_format_validations(client)
             all_issues.extend(format_issues)
             
-            # 5. Check snapshot consistency
+            # 5. NEW: Check lowercase normalization
+            lowercase_issues = self.checker.check_lowercase_normalization(client)
+            all_issues.extend(lowercase_issues)
+            
+            # 6. Check snapshot consistency
             snapshot_issues = self.checker.check_snapshot_consistency(client)
             all_issues.extend(snapshot_issues)
             
-            # 6. Check duplicate records
+            # 7. Check duplicate records
             duplicate_issues = self.checker.check_duplicate_records(client)
             all_issues.extend(duplicate_issues)
             
-            # 7. Check data distribution
+            # 8. Check data distribution
             distribution_issues = self.checker.check_data_distribution(client)
             all_issues.extend(distribution_issues)
             

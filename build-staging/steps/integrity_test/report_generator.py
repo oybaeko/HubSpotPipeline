@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Report generation for integrity testing
+Report generation for integrity testing - UPDATED with case normalization
 """
 
 import json
@@ -108,6 +108,9 @@ class ReportGenerator:
         
         if 'invalid_format' in issue_types:
             recommendations.append("Implement data validation at ingestion time to ensure proper formats")
+        
+        if 'case_normalization' in issue_types:
+            recommendations.append("Implement case normalization at ingestion time for consistent filtering and enum handling")
         
         if 'anomalous_distribution' in issue_types:
             recommendations.append("Investigate snapshots with unusual data distribution - possible data quality issues")
