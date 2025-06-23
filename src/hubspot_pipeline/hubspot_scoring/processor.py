@@ -7,6 +7,170 @@ from datetime import datetime
 from google.cloud import bigquery
 from google.api_core.exceptions import GoogleAPIError
 
+def validate_data_normalization(snapshot_id: str) -> dict:
+    """
+    Validate that data for this snapshot is properly normalized.
+    Checks for mixed-case values that should be lowercase.
+    
+    Args:
+        snapshot_id: The snapshot to validate
+        
+    Returns:
+        dict: Validation results with any issues found
+    """
+    logger = logging.getLogger('hubspot.scoring.validation')
+    logger.info(f"🔧 Validating data normalization for snapshot: {snapshot_id}")
+    
+    client = bigquery.Client()
+    project_id = os.getenv('BIGQUERY_PROJECT_ID')
+    dataset_id = os.getenv('BIGQUERY_DATASET_ID')
+    
+    validation_results = {
+        'status': 'success',
+        'issues': [],
+        'tables_checked': 0,
+        'total_records_checked': 0
+    }
+    
+    try:
+        # Check companies table for normalization issues
+        companies_query = f"""
+        SELECT 
+          'hs_companies' as table_name,
+          'lifecycle_stage' as field_name,
+          lifecycle_stage as value,
+          COUNT(*) as record_count
+        FROM `{project_id}.{dataset_id}.hs_companies`
+        WHERE snapshot_id = @snapshot_id
+          AND lifecycle_stage IS NOT NULL
+          AND lifecycle_stage != LOWER(lifecycle_stage)
+        GROUP BY lifecycle_stage
+        
+        UNION ALL
+        
+        SELECT 
+          'hs_companies' as table_name,
+          'lead_status' as field_name,
+          lead_status as value,
+          COUNT(*) as record_count
+        FROM `{project_id}.{dataset_id}.hs_companies`
+        WHERE snapshot_id = @snapshot_id
+          AND lead_status IS NOT NULL
+          AND lead_status != LOWER(lead_status)
+        GROUP BY lead_status
+        
+        UNION ALL
+        
+        SELECT 
+          'hs_companies' as table_name,
+          'company_type' as field_name,
+          company_type as value,
+          COUNT(*) as record_count
+        FROM `{project_id}.{dataset_id}.hs_companies`
+        WHERE snapshot_id = @snapshot_id
+          AND company_type IS NOT NULL
+          AND company_type != LOWER(company_type)
+        GROUP BY company_type
+        """
+        
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("snapshot_id", "TIMESTAMP", snapshot_id)
+            ]
+        )
+        
+        companies_job = client.query(companies_query, job_config=job_config)
+        companies_results = list(companies_job.result())
+        validation_results['tables_checked'] += 1
+        
+        # Check deals table for normalization issues
+        deals_query = f"""
+        SELECT 
+          'hs_deals' as table_name,
+          'deal_stage' as field_name,
+          deal_stage as value,
+          COUNT(*) as record_count
+        FROM `{project_id}.{dataset_id}.hs_deals`
+        WHERE snapshot_id = @snapshot_id
+          AND deal_stage IS NOT NULL
+          AND deal_stage != LOWER(deal_stage)
+        GROUP BY deal_stage
+        
+        UNION ALL
+        
+        SELECT 
+          'hs_deals' as table_name,
+          'deal_type' as field_name,
+          deal_type as value,
+          COUNT(*) as record_count
+        FROM `{project_id}.{dataset_id}.hs_deals`
+        WHERE snapshot_id = @snapshot_id
+          AND deal_type IS NOT NULL
+          AND deal_type != LOWER(deal_type)
+        GROUP BY deal_type
+        """
+        
+        deals_job = client.query(deals_query, job_config=job_config)
+        deals_results = list(deals_job.result())
+        validation_results['tables_checked'] += 1
+        
+        # Check owners table for email normalization issues
+        owners_query = f"""
+        SELECT 
+          'hs_owners' as table_name,
+          'email' as field_name,
+          email as value,
+          COUNT(*) as record_count
+        FROM `{project_id}.{dataset_id}.hs_owners`
+        WHERE email IS NOT NULL
+          AND email != LOWER(email)
+        GROUP BY email
+        """
+        
+        owners_job = client.query(owners_query)
+        owners_results = list(owners_job.result())
+        validation_results['tables_checked'] += 1
+        
+        # Combine all results
+        all_issues = list(companies_results) + list(deals_results) + list(owners_results)
+        
+        # Process issues
+        total_issue_records = 0
+        for issue in all_issues:
+            validation_results['issues'].append({
+                'table': issue.table_name,
+                'field': issue.field_name,
+                'mixed_case_value': issue.value,
+                'record_count': issue.record_count,
+                'expected_value': issue.value.lower() if issue.value else None
+            })
+            total_issue_records += issue.record_count
+        
+        validation_results['total_records_checked'] = total_issue_records
+        
+        # Set status based on issues found
+        if validation_results['issues']:
+            validation_results['status'] = 'issues_found'
+            logger.warning(f"⚠️ Found {len(validation_results['issues'])} normalization issues affecting {total_issue_records} records")
+            
+            # Log first few issues for debugging
+            for i, issue in enumerate(validation_results['issues'][:5]):
+                logger.warning(f"   • {issue['table']}.{issue['field']}: '{issue['mixed_case_value']}' ({issue['record_count']} records)")
+            
+            if len(validation_results['issues']) > 5:
+                logger.warning(f"   • ... and {len(validation_results['issues']) - 5} more issues")
+                
+        else:
+            logger.info("✅ All data appears properly normalized")
+        
+        return validation_results
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to validate data normalization: {e}")
+        validation_results['status'] = 'validation_error'
+        validation_results['error'] = str(e)
+        return validation_results
+
 def process_snapshot(snapshot_id: str):
     """
     Master function: processes a snapshot by running unit-score and score-history jobs in sequence.
@@ -19,10 +183,24 @@ def process_snapshot(snapshot_id: str):
     """
     logger = logging.getLogger('hubspot.scoring.processor')
     logger.info(f"🔄 Starting full processing for snapshot: {snapshot_id}")
+    logger.info(f"🔧 Data normalization validation enabled")
     
     start_time = datetime.utcnow()
     
     try:
+        # Step 0: Validate data normalization
+        logger.info("🔧 Validating data normalization...")
+        validation_results = validate_data_normalization(snapshot_id)
+        
+        if validation_results['status'] == 'issues_found':
+            logger.warning(f"⚠️ Proceeding with processing despite {len(validation_results['issues'])} normalization issues")
+            logger.warning("💡 Consider re-running ingest pipeline with updated normalization")
+        elif validation_results['status'] == 'validation_error':
+            logger.warning(f"⚠️ Normalization validation failed: {validation_results.get('error')}")
+            logger.warning("💡 Proceeding with processing - validation may not be comprehensive")
+        else:
+            logger.info("✅ Data normalization validation passed")
+        
         # Step 1: Process unit scores
         unit_results = process_unit_score_for_snapshot(snapshot_id)
         
@@ -36,12 +214,17 @@ def process_snapshot(snapshot_id: str):
             'snapshot_id': snapshot_id,
             'unit_records': unit_results.get('records', 0),
             'history_records': history_results.get('records', 0),
-            'processing_time_seconds': total_time
+            'processing_time_seconds': total_time,
+            'normalization_validation': validation_results
         }
         
         logger.info(f"✅ Completed full processing for snapshot: {snapshot_id}")
         logger.info(f"📊 Results: {unit_results.get('records', 0)} unit records, {history_results.get('records', 0)} history records")
         logger.info(f"⏱️ Total time: {total_time:.2f}s")
+        
+        # Log normalization summary
+        if validation_results['status'] == 'issues_found':
+            logger.info(f"🔧 Normalization issues: {len(validation_results['issues'])} fields had mixed case")
         
         return results
         
@@ -78,16 +261,23 @@ def process_unit_score_for_snapshot(snapshot_id: str):
     project_id = os.getenv('BIGQUERY_PROJECT_ID')
     dataset_id = os.getenv('BIGQUERY_DATASET_ID')
 
-    # FIXED: Updated SQL to match actual table structure and filter only open deals
+    # UPDATED: Enhanced SQL with normalization handling and validation
     query = f"""
-    -- Step 1: Filter companies for this snapshot
+    -- Step 1: Filter companies for this snapshot with normalization safety
     WITH companies AS (
       SELECT 
-        LOWER(lifecycle_stage) AS lifecycle_stage,
+        -- Apply LOWER() as safety measure for any missed normalization
+        LOWER(COALESCE(lifecycle_stage, '')) AS lifecycle_stage,
         LOWER(COALESCE(REPLACE(lead_status, " ", "_"), "")) AS lead_status,
         company_id,
         hubspot_owner_id,
-        snapshot_id
+        snapshot_id,
+        -- Track if any normalization was needed (for monitoring)
+        CASE 
+          WHEN lifecycle_stage != LOWER(COALESCE(lifecycle_stage, '')) THEN 1
+          WHEN lead_status != LOWER(COALESCE(REPLACE(lead_status, " ", "_"), "")) THEN 1
+          ELSE 0
+        END as normalization_applied
       FROM `{project_id}.{dataset_id}.hs_companies`
       WHERE snapshot_id = @snapshot_id
     ),
@@ -97,12 +287,18 @@ def process_unit_score_for_snapshot(snapshot_id: str):
         d.deal_id,
         d.associated_company_id,
         d.snapshot_id,
-        LOWER(d.deal_stage) AS deal_stage,
+        -- Apply LOWER() as safety measure for any missed normalization
+        LOWER(COALESCE(d.deal_stage, '')) AS deal_stage,
         -- Check if deal is closed using reference table
-        COALESCE(ref.is_closed, FALSE) as is_deal_closed
+        COALESCE(ref.is_closed, FALSE) as is_deal_closed,
+        -- Track if any normalization was needed
+        CASE 
+          WHEN d.deal_stage != LOWER(COALESCE(d.deal_stage, '')) THEN 1
+          ELSE 0
+        END as normalization_applied
       FROM `{project_id}.{dataset_id}.hs_deals` d
       LEFT JOIN `{project_id}.{dataset_id}.hs_deal_stage_reference` ref 
-        ON d.deal_stage = ref.stage_id
+        ON LOWER(d.deal_stage) = LOWER(ref.stage_id)  -- Case-insensitive join for safety
       WHERE d.snapshot_id = @snapshot_id
         AND COALESCE(ref.is_closed, FALSE) = FALSE  -- Only open deals
     ),
@@ -115,7 +311,9 @@ def process_unit_score_for_snapshot(snapshot_id: str):
         c.lifecycle_stage,
         c.lead_status,
         d.deal_stage,
-        -- Build combined_stage logic
+        -- Track normalization activity
+        GREATEST(c.normalization_applied, COALESCE(d.normalization_applied, 0)) as normalization_applied,
+        -- Build combined_stage logic with normalized values
         CASE
           WHEN c.lifecycle_stage = 'lead' THEN 
             CONCAT('lead/', COALESCE(NULLIF(c.lead_status, ''), 'unknown'))
@@ -135,7 +333,7 @@ def process_unit_score_for_snapshot(snapshot_id: str):
       FROM companies c
       LEFT JOIN deals d ON d.associated_company_id = c.company_id
     ),
-    -- Step 4: Join with stage mapping to get scores
+    -- Step 4: Join with stage mapping to get scores (case-insensitive for safety)
     scored AS (
       SELECT
         j.company_id,
@@ -149,16 +347,30 @@ def process_unit_score_for_snapshot(snapshot_id: str):
         COALESCE(sm.adjusted_score, 0.0) as adjusted_score,
         j.stage_source,
         j.snapshot_id,
-        j.record_timestamp
+        j.record_timestamp,
+        j.normalization_applied
       FROM joined j
       LEFT JOIN `{project_id}.{dataset_id}.hs_stage_mapping` sm
-        ON sm.combined_stage = j.combined_stage
+        ON LOWER(sm.combined_stage) = LOWER(j.combined_stage)  -- Case-insensitive join for safety
     )
-    SELECT * FROM scored
-    -- Remove the owner_id filter to include all companies, including those with owner_id=0
+    SELECT 
+      company_id,
+      deal_id,
+      owner_id,
+      lifecycle_stage,
+      lead_status,
+      deal_stage,
+      combined_stage,
+      stage_level,
+      adjusted_score,
+      stage_source,
+      snapshot_id,
+      record_timestamp
+    FROM scored
+    -- Optional: Log normalization activity (can be removed in production)
     """
 
-    logger.info("🔹 Submitting BigQuery job for unit scores...")
+    logger.info("🔹 Submitting BigQuery job for unit scores with normalization safety...")
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
@@ -170,7 +382,6 @@ def process_unit_score_for_snapshot(snapshot_id: str):
 
     try:
         # Step 1: Try to delete any existing records for this snapshot to avoid duplicates
-        # Handle the case where table doesn't exist gracefully
         logger.info(f"🗑️ Cleaning existing records for snapshot: {snapshot_id}")
         
         delete_query = f"""
@@ -185,12 +396,10 @@ def process_unit_score_for_snapshot(snapshot_id: str):
         )
         
         # Try DELETE with broader exception handling
-        delete_success = False
         try:
             delete_job = client.query(delete_query, job_config=delete_job_config)
             delete_job.result()
             logger.debug(f"✅ Cleaned existing records for snapshot: {snapshot_id}")
-            delete_success = True
         except Exception as delete_error:
             # Table might not exist - check if it's a "not found" error
             if "not found" in str(delete_error).lower() or "404" in str(delete_error):
@@ -204,7 +413,6 @@ def process_unit_score_for_snapshot(snapshot_id: str):
         job.result()  # Wait for completion
         
         # Step 3: Get accurate row count of newly inserted records
-        # Use num_dml_affected_rows from the INSERT job, with fallback to table count
         rows_processed = job.num_dml_affected_rows
         
         if rows_processed is None or rows_processed == 0:
@@ -237,7 +445,7 @@ def process_unit_score_for_snapshot(snapshot_id: str):
             SELECT 
               'companies' as source_table,
               COUNT(*) as record_count,
-              STRING_AGG(DISTINCT lifecycle_stage ORDER BY lifecycle_stage) as lifecycle_stages
+              STRING_AGG(DISTINCT LOWER(lifecycle_stage) ORDER BY LOWER(lifecycle_stage)) as lifecycle_stages
             FROM `{project_id}.{dataset_id}.hs_companies`
             WHERE snapshot_id = @snapshot_id
             
@@ -246,7 +454,7 @@ def process_unit_score_for_snapshot(snapshot_id: str):
             SELECT 
               'deals' as source_table,
               COUNT(*) as record_count,
-              STRING_AGG(DISTINCT deal_stage ORDER BY deal_stage LIMIT 10) as deal_stages
+              STRING_AGG(DISTINCT LOWER(deal_stage) ORDER BY LOWER(deal_stage) LIMIT 10) as deal_stages
             FROM `{project_id}.{dataset_id}.hs_deals`
             WHERE snapshot_id = @snapshot_id
             
@@ -255,7 +463,7 @@ def process_unit_score_for_snapshot(snapshot_id: str):
             SELECT 
               'stage_mapping' as source_table,
               COUNT(*) as record_count,
-              STRING_AGG(DISTINCT combined_stage ORDER BY combined_stage LIMIT 10) as combined_stages
+              STRING_AGG(DISTINCT LOWER(combined_stage) ORDER BY LOWER(combined_stage) LIMIT 10) as combined_stages
             FROM `{project_id}.{dataset_id}.hs_stage_mapping`
             """
             
@@ -268,7 +476,7 @@ def process_unit_score_for_snapshot(snapshot_id: str):
             debug_job = client.query(debug_query, job_config=debug_job_config)
             debug_results = debug_job.result()
             
-            logger.info("📊 Source data summary:")
+            logger.info("📊 Source data summary (normalized):")
             for row in debug_results:
                 logger.info(f"   • {row.source_table}: {row.record_count} records")
                 if row.source_table == 'companies' and hasattr(row, 'lifecycle_stages'):
@@ -354,24 +562,24 @@ def process_score_history_for_snapshot(snapshot_id: str):
     project_id = os.getenv('BIGQUERY_PROJECT_ID')
     dataset_id = os.getenv('BIGQUERY_DATASET_ID')
 
-    # FIXED: Updated aggregation query with proper field names
+    # UPDATED: Aggregation query with normalization safety
     query = f"""
     SELECT
       snapshot_id,
       owner_id,
-      combined_stage,
+      -- Apply LOWER() for safety in case any mixed case slipped through
+      LOWER(combined_stage) as combined_stage,
       COUNT(DISTINCT company_id) AS num_companies,
       SUM(adjusted_score) AS total_score,
       CURRENT_TIMESTAMP() AS record_timestamp
     FROM `{project_id}.{dataset_id}.hs_pipeline_units_snapshot`
     WHERE snapshot_id = @snapshot_id
-      -- Remove owner_id IS NOT NULL filter to include owner_id=0
       AND adjusted_score IS NOT NULL
-    GROUP BY snapshot_id, owner_id, combined_stage
-    -- Remove the HAVING clause to include all groups, even with 0 companies
+      AND combined_stage IS NOT NULL
+    GROUP BY snapshot_id, owner_id, LOWER(combined_stage)
     """
 
-    logger.info("🔹 Submitting BigQuery job for score history...")
+    logger.info("🔹 Submitting BigQuery job for score history with normalization safety...")
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
@@ -383,7 +591,6 @@ def process_score_history_for_snapshot(snapshot_id: str):
 
     try:
         # Step 1: Delete any existing records for this snapshot to avoid duplicates
-        # This ensures we only keep the latest run of each snapshot
         delete_query = f"""
         DELETE FROM `{project_id}.{dataset_id}.hs_pipeline_score_history`
         WHERE snapshot_id = @snapshot_id
@@ -405,7 +612,6 @@ def process_score_history_for_snapshot(snapshot_id: str):
         job.result()  # Wait for completion
         
         # Step 3: Get accurate row count of newly inserted records
-        # Use num_dml_affected_rows from the INSERT job, with fallback to table count
         rows_processed = job.num_dml_affected_rows
         
         if rows_processed is None or rows_processed == 0:
@@ -462,13 +668,16 @@ def debug_snapshot_data(snapshot_id: str) -> dict:
     debug_info = {}
     
     try:
-        # Check companies
+        # Check companies with normalization status
         companies_query = f"""
         SELECT 
           COUNT(*) as total_companies,
-          COUNT(DISTINCT lifecycle_stage) as unique_lifecycle_stages,
-          STRING_AGG(DISTINCT lifecycle_stage ORDER BY lifecycle_stage) as lifecycle_stages,
-          COUNT(DISTINCT hubspot_owner_id) as unique_owners
+          COUNT(DISTINCT LOWER(lifecycle_stage)) as unique_lifecycle_stages,
+          STRING_AGG(DISTINCT LOWER(lifecycle_stage) ORDER BY LOWER(lifecycle_stage)) as lifecycle_stages,
+          COUNT(DISTINCT hubspot_owner_id) as unique_owners,
+          -- Check for normalization issues
+          SUM(CASE WHEN lifecycle_stage != LOWER(lifecycle_stage) THEN 1 ELSE 0 END) as lifecycle_normalization_issues,
+          SUM(CASE WHEN lead_status != LOWER(lead_status) THEN 1 ELSE 0 END) as lead_status_normalization_issues
         FROM `{project_id}.{dataset_id}.hs_companies`
         WHERE snapshot_id = @snapshot_id
         """
@@ -482,16 +691,23 @@ def debug_snapshot_data(snapshot_id: str) -> dict:
             'total': companies_result.total_companies,
             'unique_lifecycle_stages': companies_result.unique_lifecycle_stages,
             'lifecycle_stages': companies_result.lifecycle_stages,
-            'unique_owners': companies_result.unique_owners
+            'unique_owners': companies_result.unique_owners,
+            'normalization_issues': {
+                'lifecycle_stage': companies_result.lifecycle_normalization_issues,
+                'lead_status': companies_result.lead_status_normalization_issues
+            }
         }
         
-        # Check deals
+        # Check deals with normalization status
         deals_query = f"""
         SELECT 
           COUNT(*) as total_deals,
-          COUNT(DISTINCT deal_stage) as unique_deal_stages,
-          STRING_AGG(DISTINCT deal_stage ORDER BY deal_stage) as deal_stages,
-          COUNT(DISTINCT associated_company_id) as unique_associated_companies
+          COUNT(DISTINCT LOWER(deal_stage)) as unique_deal_stages,
+          STRING_AGG(DISTINCT LOWER(deal_stage) ORDER BY LOWER(deal_stage)) as deal_stages,
+          COUNT(DISTINCT associated_company_id) as unique_associated_companies,
+          -- Check for normalization issues
+          SUM(CASE WHEN deal_stage != LOWER(deal_stage) THEN 1 ELSE 0 END) as deal_stage_normalization_issues,
+          SUM(CASE WHEN deal_type != LOWER(deal_type) THEN 1 ELSE 0 END) as deal_type_normalization_issues
         FROM `{project_id}.{dataset_id}.hs_deals`
         WHERE snapshot_id = @snapshot_id
         """
@@ -505,14 +721,21 @@ def debug_snapshot_data(snapshot_id: str) -> dict:
             'total': deals_result.total_deals,
             'unique_deal_stages': deals_result.unique_deal_stages,
             'deal_stages': deals_result.deal_stages,
-            'unique_associated_companies': deals_result.unique_associated_companies
+            'unique_associated_companies': deals_result.unique_associated_companies,
+            'normalization_issues': {
+                'deal_stage': deals_result.deal_stage_normalization_issues,
+                'deal_type': deals_result.deal_type_normalization_issues
+            }
         }
         
-        # Check stage mapping
+        # Check stage mapping with normalization status
         mapping_query = f"""
         SELECT 
           COUNT(*) as total_mappings,
-          STRING_AGG(DISTINCT combined_stage ORDER BY combined_stage) as combined_stages
+          STRING_AGG(DISTINCT LOWER(combined_stage) ORDER BY LOWER(combined_stage)) as combined_stages,
+          -- Check for normalization issues in stage mapping itself
+          SUM(CASE WHEN combined_stage != LOWER(combined_stage) THEN 1 ELSE 0 END) as combined_stage_normalization_issues,
+          SUM(CASE WHEN lifecycle_stage != LOWER(lifecycle_stage) THEN 1 ELSE 0 END) as lifecycle_stage_normalization_issues
         FROM `{project_id}.{dataset_id}.hs_stage_mapping`
         """
         
@@ -521,13 +744,56 @@ def debug_snapshot_data(snapshot_id: str) -> dict:
         
         debug_info['stage_mapping'] = {
             'total': mapping_result.total_mappings,
-            'combined_stages': mapping_result.combined_stages
+            'combined_stages': mapping_result.combined_stages,
+            'normalization_issues': {
+                'combined_stage': mapping_result.combined_stage_normalization_issues,
+                'lifecycle_stage': mapping_result.lifecycle_stage_normalization_issues
+            }
+        }
+        
+        # Check owners for email normalization
+        owners_query = f"""
+        SELECT 
+          COUNT(*) as total_owners,
+          COUNT(DISTINCT LOWER(email)) as unique_emails,
+          -- Check for email normalization issues
+          SUM(CASE WHEN email != LOWER(email) THEN 1 ELSE 0 END) as email_normalization_issues
+        FROM `{project_id}.{dataset_id}.hs_owners`
+        """
+        
+        owners_job = client.query(owners_query)
+        owners_result = next(owners_job.result())
+        
+        debug_info['owners'] = {
+            'total': owners_result.total_owners,
+            'unique_emails': owners_result.unique_emails,
+            'normalization_issues': {
+                'email': owners_result.email_normalization_issues
+            }
         }
         
         logger.info(f"📊 Debug summary for {snapshot_id}:")
         logger.info(f"   • Companies: {debug_info['companies']['total']} ({debug_info['companies']['unique_owners']} owners)")
         logger.info(f"   • Deals: {debug_info['deals']['total']} ({debug_info['deals']['unique_associated_companies']} associated companies)")
         logger.info(f"   • Stage mappings: {debug_info['stage_mapping']['total']}")
+        logger.info(f"   • Owners: {debug_info['owners']['total']}")
+        
+        # Log normalization issues if any
+        total_normalization_issues = (
+            debug_info['companies']['normalization_issues']['lifecycle_stage'] +
+            debug_info['companies']['normalization_issues']['lead_status'] +
+            debug_info['deals']['normalization_issues']['deal_stage'] +
+            debug_info['deals']['normalization_issues']['deal_type'] +
+            debug_info['stage_mapping']['normalization_issues']['combined_stage'] +
+            debug_info['stage_mapping']['normalization_issues']['lifecycle_stage'] +
+            debug_info['owners']['normalization_issues']['email']
+        )
+        
+        if total_normalization_issues > 0:
+            logger.warning(f"🔧 Found {total_normalization_issues} total normalization issues across all tables")
+            logger.warning("💡 Consider re-running ingest with updated normalization logic")
+        else:
+            logger.info("✅ No normalization issues detected in debug analysis")
         
         return debug_info
         

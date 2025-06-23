@@ -43,6 +43,7 @@ def main(event=None, context=None):
         return f"Configuration error: {e}", 500
     
     logger.info("🚀 HubSpot ingest started (with reference data and registry)")
+    logger.info("🔧 Data normalization enabled - email, enum, and URL fields will be normalized to lowercase")
     
     # Log trigger source for tracking
     trigger_source = event.get("trigger_source", "unknown")
@@ -129,6 +130,15 @@ def main(event=None, context=None):
         for object_type, config_obj in schema.items():
             obj_start_time = datetime.utcnow()
             logger.info(f"🔄 Processing {object_type}...")
+            
+            # Log normalization fields for this object type
+            table_name = config_obj.get("object_name")
+            if logger.isEnabledFor(logging.DEBUG):
+                from .normalization import get_fields_requiring_normalization, get_url_fields
+                norm_fields = get_fields_requiring_normalization().get(table_name, set())
+                url_fields = get_url_fields().get(table_name, set())
+                if norm_fields or url_fields:
+                    logger.debug(f"🔧 {object_type} normalization: enum={norm_fields}, url={url_fields}")
             
             try:
                 # Fetch data
@@ -234,6 +244,7 @@ def main(event=None, context=None):
         logger.info(f"📊 Results by object: {results}")
         logger.info(f"📊 Reference data: {reference_counts}")
         logger.info(f"⏱️ Total processing time: {total_time:.2f}s")
+        logger.info(f"🔧 Data normalization applied to email, enum, and URL fields")
         
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"Average processing rate: {total_rows/total_time:.1f} records/second")
@@ -245,7 +256,8 @@ def main(event=None, context=None):
             "results": results,
             "reference_counts": reference_counts,
             "processing_time_seconds": total_time,
-            "dry_run": dry_run
+            "dry_run": dry_run,
+            "normalization_enabled": True
         }, 200
         
     except Exception as e:
@@ -276,7 +288,8 @@ def main(event=None, context=None):
             "total_records": total_rows,
             "results": results,
             "processing_time_seconds": total_time,
-            "dry_run": dry_run
+            "dry_run": dry_run,
+            "normalization_enabled": True
         }, 500
 
 

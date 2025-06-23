@@ -1,0 +1,79 @@
+📋 Logging to sync_log_220625_133253.txt
+[0;31m⚠️  THIS WILL BACK UP, DELETE TABLES + VIEWS, AND OVERWRITE 'Hubspot_prod' FROM 'Hubspot_staging'[0m
+Backup will be created as: Hubspot_prod_220625_133253
+
+📍 Detected region: EU
+📦 Creating backup dataset: Hubspot_prod_220625_133253
+Dataset 'hubspot-452402:Hubspot_prod_220625_133253' successfully created.
+🔄 Backing up: hs_companies
+Waiting on bqjob_r3917d9644c135427_0000019795b2612f_1 ... (0s) Current status: RUNNING                                                                                      Waiting on bqjob_r3917d9644c135427_0000019795b2612f_1 ... (0s) Current status: DONE   
+Table 'hubspot-452402:Hubspot_prod.hs_companies' successfully copied to 'hubspot-452402:Hubspot_prod_220625_133253.hs_companies'
+🔄 Backing up: hs_deal_stage_reference
+Waiting on bqjob_r71cd8edfa15b09c9_0000019795b27cf8_1 ... (0s) Current status: RUNNING                                                                                      Waiting on bqjob_r71cd8edfa15b09c9_0000019795b27cf8_1 ... (0s) Current status: DONE   
+Table 'hubspot-452402:Hubspot_prod.hs_deal_stage_reference' successfully copied to 'hubspot-452402:Hubspot_prod_220625_133253.hs_deal_stage_reference'
+🔄 Backing up: hs_deals
+Waiting on bqjob_r3319b89aaf030603_0000019795b297e3_1 ... (0s) Current status: RUNNING                                                                                      Waiting on bqjob_r3319b89aaf030603_0000019795b297e3_1 ... (0s) Current status: DONE   
+Table 'hubspot-452402:Hubspot_prod.hs_deals' successfully copied to 'hubspot-452402:Hubspot_prod_220625_133253.hs_deals'
+🔄 Backing up: hs_owners
+Waiting on bqjob_r6ac877588df33a48_0000019795b2b148_1 ... (0s) Current status: RUNNING                                                                                      Waiting on bqjob_r6ac877588df33a48_0000019795b2b148_1 ... (0s) Current status: DONE   
+Table 'hubspot-452402:Hubspot_prod.hs_owners' successfully copied to 'hubspot-452402:Hubspot_prod_220625_133253.hs_owners'
+🔄 Backing up: hs_pipeline_score_history
+Waiting on bqjob_r1daf2e058484308c_0000019795b2c86a_1 ... (0s) Current status: RUNNING                                                                                      Waiting on bqjob_r1daf2e058484308c_0000019795b2c86a_1 ... (0s) Current status: DONE   
+Table 'hubspot-452402:Hubspot_prod.hs_pipeline_score_history' successfully copied to 'hubspot-452402:Hubspot_prod_220625_133253.hs_pipeline_score_history'
+🔄 Backing up: hs_pipeline_units_snapshot
+Waiting on bqjob_r96308adb00b7c_0000019795b2e0ef_1 ... (0s) Current status: RUNNING                                                                                   Waiting on bqjob_r96308adb00b7c_0000019795b2e0ef_1 ... (0s) Current status: DONE   
+Table 'hubspot-452402:Hubspot_prod.hs_pipeline_units_snapshot' successfully copied to 'hubspot-452402:Hubspot_prod_220625_133253.hs_pipeline_units_snapshot'
+🔄 Backing up: hs_snapshot_registry
+Waiting on bqjob_r6c574434d745b51_0000019795b2f98a_1 ... (0s) Current status: RUNNING                                                                                     Waiting on bqjob_r6c574434d745b51_0000019795b2f98a_1 ... (0s) Current status: DONE   
+Table 'hubspot-452402:Hubspot_prod.hs_snapshot_registry' successfully copied to 'hubspot-452402:Hubspot_prod_220625_133253.hs_snapshot_registry'
+🔄 Backing up: hs_stage_mapping
+Waiting on bqjob_r637a7dbf6c4e48d0_0000019795b311a4_1 ... (0s) Current status: RUNNING                                                                                      Waiting on bqjob_r637a7dbf6c4e48d0_0000019795b311a4_1 ... (0s) Current status: DONE   
+Table 'hubspot-452402:Hubspot_prod.hs_stage_mapping' successfully copied to 'hubspot-452402:Hubspot_prod_220625_133253.hs_stage_mapping'
+🔍 Validating table backups (row count + schema)...
+✅ hs_companies: Backup valid
+✅ hs_deal_stage_reference: Backup valid
+✅ hs_deals: Backup valid
+✅ hs_owners: Backup valid
+✅ hs_pipeline_score_history: Backup valid
+✅ hs_pipeline_units_snapshot: Backup valid
+✅ hs_snapshot_registry: Backup valid
+✅ hs_stage_mapping: Backup valid
+[0;32m✅ Backup passed all checks: Hubspot_prod_220625_133253[0m
+
+🧹 Deleting all TABLES + VIEWS in Hubspot_prod...
+❌ Deleting: hs_companies
+❌ Deleting: hs_deal_stage_reference
+❌ Deleting: hs_deals
+❌ Deleting: hs_owners
+❌ Deleting: hs_pipeline_score_history
+❌ Deleting: hs_pipeline_units_snapshot
+❌ Deleting: hs_snapshot_registry
+❌ Deleting: hs_stage_mapping
+📥 Copying only TABLES from Hubspot_staging to Hubspot_prod...
+📄 Copying: hs_companies
+Waiting on bqjob_r5e1b42e577db7e7b_0000019795b4e999_1 ... (0s) Current status: RUNNING                                                                                      Waiting on bqjob_r5e1b42e577db7e7b_0000019795b4e999_1 ... (0s) Current status: DONE   
+Table 'hubspot-452402:Hubspot_staging.hs_companies' successfully copied to 'hubspot-452402:Hubspot_prod.hs_companies'
+📄 Copying: hs_deal_stage_reference
+Waiting on bqjob_r396944787f03947a_0000019795b4ffce_1 ... (0s) Current status: RUNNING                                                                                      Waiting on bqjob_r396944787f03947a_0000019795b4ffce_1 ... (0s) Current status: DONE   
+Table 'hubspot-452402:Hubspot_staging.hs_deal_stage_reference' successfully copied to 'hubspot-452402:Hubspot_prod.hs_deal_stage_reference'
+📄 Copying: hs_deals
+Waiting on bqjob_r2c793ef7aa56a90c_0000019795b51632_1 ... (0s) Current status: RUNNING                                                                                      Waiting on bqjob_r2c793ef7aa56a90c_0000019795b51632_1 ... (0s) Current status: DONE   
+Table 'hubspot-452402:Hubspot_staging.hs_deals' successfully copied to 'hubspot-452402:Hubspot_prod.hs_deals'
+📄 Copying: hs_owners
+Waiting on bqjob_rcd6a7f3551c58c7_0000019795b52d3d_1 ... (0s) Current status: RUNNING                                                                                     Waiting on bqjob_rcd6a7f3551c58c7_0000019795b52d3d_1 ... (0s) Current status: DONE   
+Table 'hubspot-452402:Hubspot_staging.hs_owners' successfully copied to 'hubspot-452402:Hubspot_prod.hs_owners'
+📄 Copying: hs_pipeline_score_history
+Waiting on bqjob_r53c967bc106d9552_0000019795b54317_1 ... (0s) Current status: RUNNING                                                                                      Waiting on bqjob_r53c967bc106d9552_0000019795b54317_1 ... (0s) Current status: DONE   
+Table 'hubspot-452402:Hubspot_staging.hs_pipeline_score_history' successfully copied to 'hubspot-452402:Hubspot_prod.hs_pipeline_score_history'
+📄 Copying: hs_pipeline_units_snapshot
+Waiting on bqjob_r2cd4c2ef74b9fc2_0000019795b5588b_1 ... (0s) Current status: RUNNING                                                                                     Waiting on bqjob_r2cd4c2ef74b9fc2_0000019795b5588b_1 ... (0s) Current status: DONE   
+Table 'hubspot-452402:Hubspot_staging.hs_pipeline_units_snapshot' successfully copied to 'hubspot-452402:Hubspot_prod.hs_pipeline_units_snapshot'
+📄 Copying: hs_snapshot_registry
+Waiting on bqjob_r3a0b585c629feaad_0000019795b56ecb_1 ... (0s) Current status: RUNNING                                                                                      Waiting on bqjob_r3a0b585c629feaad_0000019795b56ecb_1 ... (0s) Current status: DONE   
+Table 'hubspot-452402:Hubspot_staging.hs_snapshot_registry' successfully copied to 'hubspot-452402:Hubspot_prod.hs_snapshot_registry'
+📄 Copying: hs_stage_mapping
+Waiting on bqjob_r1f2ffe1ff2bb4e83_0000019795b58525_1 ... (0s) Current status: RUNNING                                                                                      Waiting on bqjob_r1f2ffe1ff2bb4e83_0000019795b58525_1 ... (0s) Current status: DONE   
+Table 'hubspot-452402:Hubspot_staging.hs_stage_mapping' successfully copied to 'hubspot-452402:Hubspot_prod.hs_stage_mapping'
+[0;32m🎉 Sync complete. Production now mirrors staging (only tables).[0m
+📦 Backup saved as: Hubspot_prod_220625_133253
+📋 Log file saved to: sync_log_220625_133253.txt

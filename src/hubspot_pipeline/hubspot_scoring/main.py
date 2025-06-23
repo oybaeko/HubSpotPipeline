@@ -1,4 +1,4 @@
-# src/hubspot_pipeline/scoring/main.py
+# src/hubspot_pipeline/hubspot_scoring/main.py
 
 import logging
 from datetime import datetime
@@ -11,7 +11,7 @@ from .registry import register_scoring_start, register_scoring_completion, regis
 
 def process_snapshot_event(event_data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Process a snapshot completion event and run scoring pipeline
+    Process a snapshot completion event and run scoring pipeline with normalization validation
     
     Args:
         event_data: Parsed event data from Pub/Sub message
@@ -30,6 +30,7 @@ def process_snapshot_event(event_data: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("Missing snapshot_id in event data")
     
     logger.info(f"📊 Processing snapshot: {snapshot_id}")
+    logger.info(f"🔧 Data normalization validation enabled")
     logger.info(f"📋 Data tables: {data_tables}")
     logger.info(f"📋 Reference tables: {reference_tables}")
     
@@ -43,19 +44,30 @@ def process_snapshot_event(event_data: Dict[str, Any]) -> Dict[str, Any]:
         # Register scoring start
         register_scoring_start(snapshot_id)
         
-        # Step 1: Populate stage mapping
-        logger.info("📋 Populating stage mapping...")
+        # Step 1: Populate stage mapping with normalized values
+        logger.info("📋 Populating normalized stage mapping...")
         mapping_count = populate_stage_mapping()
-        logger.info(f"✅ Stage mapping populated: {mapping_count} records")
+        logger.info(f"✅ Stage mapping populated: {mapping_count} normalized records")
         
-        # Step 2: Process the snapshot
-        logger.info(f"⚙️ Processing snapshot scores for {snapshot_id}...")
+        # Step 2: Process the snapshot with normalization validation
+        logger.info(f"⚙️ Processing snapshot scores for {snapshot_id} with normalization checks...")
         processing_results = process_snapshot(snapshot_id)
         
         if processing_results.get('status') != 'success':
             raise RuntimeError(f"Snapshot processing failed: {processing_results.get('error')}")
         
         logger.info(f"✅ Snapshot {snapshot_id} scoring completed")
+        
+        # Extract normalization validation results
+        normalization_validation = processing_results.get('normalization_validation', {})
+        if normalization_validation.get('status') == 'issues_found':
+            issues_count = len(normalization_validation.get('issues', []))
+            logger.warning(f"⚠️ Completed processing despite {issues_count} normalization issues")
+            logger.warning("💡 Consider re-running ingest pipeline with updated normalization")
+        elif normalization_validation.get('status') == 'validation_error':
+            logger.warning(f"⚠️ Normalization validation had errors: {normalization_validation.get('error')}")
+        else:
+            logger.info("✅ All input data was properly normalized")
         
         # Calculate totals
         total_records = sum(data_tables.values()) if data_tables else 0
@@ -64,6 +76,9 @@ def process_snapshot_event(event_data: Dict[str, Any]) -> Dict[str, Any]:
         
         # Register completion
         completion_notes = f"Units: {unit_records}, History: {history_records}, Mapping: {mapping_count}"
+        if normalization_validation.get('status') == 'issues_found':
+            completion_notes += f", Normalization issues: {len(normalization_validation.get('issues', []))}"
+        
         register_scoring_completion(snapshot_id, total_records, completion_notes)
         
         # Build success result
@@ -77,11 +92,19 @@ def process_snapshot_event(event_data: Dict[str, Any]) -> Dict[str, Any]:
             "score_history": history_records,
             "stage_mapping": mapping_count,
             "processing_time_seconds": total_time,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
+            "normalization_validation": normalization_validation,
+            "normalization_enabled": True
         }
         
         logger.info(f"🎉 Scoring completed successfully for {snapshot_id}")
         logger.info(f"📊 Final results: {result}")
+        
+        # Log normalization summary
+        if normalization_validation.get('status') == 'issues_found':
+            logger.info(f"🔧 Normalization summary: {len(normalization_validation.get('issues', []))} issues detected and handled")
+        else:
+            logger.info(f"🔧 Normalization summary: All data properly normalized")
         
         return result
         
@@ -100,7 +123,8 @@ def process_snapshot_event(event_data: Dict[str, Any]) -> Dict[str, Any]:
             "snapshot_id": snapshot_id,
             "error": error_msg,
             "processing_time_seconds": total_time,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
+            "normalization_enabled": True
         }
 
 

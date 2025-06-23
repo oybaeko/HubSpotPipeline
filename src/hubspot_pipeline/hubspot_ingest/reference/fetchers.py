@@ -5,6 +5,7 @@ import os
 import requests
 from datetime import datetime
 from typing import List, Dict, Any
+from hubspot_pipeline.hubspot_ingest.normalization import normalize_field_value
 
 def fetch_owners() -> List[Dict[str, Any]]:
     """
@@ -37,12 +38,24 @@ def fetch_owners() -> List[Dict[str, Any]]:
         
         logger.info(f"✅ Retrieved {len(raw_owners)} owners from HubSpot")
         
-        # Transform to BigQuery schema format with consistent record_timestamp
+        # Transform to BigQuery schema format with consistent record_timestamp and normalization
         owners_rows = []
+        normalization_count = 0
+        
         for owner in raw_owners:
+            # Apply email normalization
+            original_email = owner.get("email")
+            normalized_email = normalize_field_value('email', original_email, 'hs_owners')
+            
+            # Track normalization activity
+            if original_email != normalized_email and original_email is not None:
+                normalization_count += 1
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"Normalized owner email: '{original_email}' -> '{normalized_email}'")
+            
             row = {
                 "owner_id": str(owner.get("id")),  # Ensure string
-                "email": owner.get("email"),
+                "email": normalized_email,
                 "first_name": owner.get("firstName"),
                 "last_name": owner.get("lastName"),
                 "user_id": str(owner.get("userId")) if owner.get("userId") else None,
@@ -50,6 +63,12 @@ def fetch_owners() -> List[Dict[str, Any]]:
                 "record_timestamp": owner.get("updatedAt") or owner.get("createdAt"),
             }
             owners_rows.append(row)
+        
+        # Log normalization activity
+        if normalization_count > 0:
+            logger.info(f"🔧 Normalized {normalization_count} owner email addresses")
+        else:
+            logger.debug("🔧 No owner emails required normalization")
         
         logger.info(f"✅ Transformed {len(owners_rows)} owner records for BigQuery")
         return owners_rows
@@ -136,6 +155,7 @@ def fetch_deal_stages() -> List[Dict[str, Any]]:
                     logger.debug(f"  Stage: {record['stage_label']} ({record['stage_id']})")
         
         logger.info(f"✅ Fetched {len(stage_records)} deal stages from {len(pipelines)} pipelines")
+        logger.debug("🔧 Deal stages do not require normalization (reference data)")
         return stage_records
         
     except requests.RequestException as e:

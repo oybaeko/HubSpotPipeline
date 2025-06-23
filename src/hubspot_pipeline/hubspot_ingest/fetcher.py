@@ -7,6 +7,7 @@ from datetime import datetime
 from hubspot_pipeline.hubspot_ingest.store import store_to_bigquery, upsert_to_bigquery
 from hubspot_pipeline.hubspot_ingest.events import publish_snapshot_completed_event
 from hubspot_pipeline.hubspot_ingest.registry import register_snapshot_ingest_complete
+from hubspot_pipeline.hubspot_ingest.normalization import normalize_field_value
 
 def get_client():
     """Get HubSpot client with API key from environment"""
@@ -46,6 +47,7 @@ def fetch_object(object_type, config, snapshot_id, limit=100):
     api_object = config.get("api_object", object_type)
     fields = config.get("fields", {})
     associations_config = config.get("associations", {})
+    table_name = config.get("object_name")  # Get table name for normalization context
     
     logger.info(f"🔗 Connecting to HubSpot API for '{object_type}' (API object: {api_object})")
     if unlimited:
@@ -74,6 +76,7 @@ def fetch_object(object_type, config, snapshot_id, limit=100):
     page_count = 0
     api_calls = 0
     start_time = datetime.utcnow()
+    normalization_count = 0  # Track how many fields were normalized
     
     logger.info(f"🚀 Starting data fetch for {object_type}")
     
@@ -137,11 +140,22 @@ def fetch_object(object_type, config, snapshot_id, limit=100):
                         "record_timestamp": datetime.utcnow().isoformat() + "Z"  # Add consistent timestamp
                     }
                     
-                    # Add properties
+                    # Add properties with normalization
                     for hs_key, bq_key in fields.items():
                         if hs_key != "id":
                             value = obj.properties.get(hs_key)
-                            row[bq_key] = value
+                            
+                            # Apply normalization based on field name and table
+                            original_value = value
+                            normalized_value = normalize_field_value(bq_key, value, table_name)
+                            
+                            # Track normalization activity
+                            if original_value != normalized_value and original_value is not None:
+                                normalization_count += 1
+                                if logger.isEnabledFor(logging.DEBUG):
+                                    logger.debug(f"Normalized {bq_key}: '{original_value}' -> '{normalized_value}'")
+                            
+                            row[bq_key] = normalized_value
                             
                             if logger.isEnabledFor(logging.DEBUG) and i == 0:  # Log first record details
                                 logger.debug(f"Mapped {hs_key} -> {bq_key}: {type(value).__name__}")
@@ -216,6 +230,12 @@ def fetch_object(object_type, config, snapshot_id, limit=100):
     logger.info(f"🔗 API calls made: {api_calls}")
     logger.info(f"⏱️ Total time: {total_time:.2f}s")
     
+    # Log normalization activity
+    if normalization_count > 0:
+        logger.info(f"🔧 Normalized {normalization_count} field values to lowercase")
+    else:
+        logger.debug("🔧 No field values required normalization")
+    
     if total_time > 0:
         logger.info(f"📈 Average rate: {final_count/total_time:.1f} records/second")
     
@@ -254,10 +274,21 @@ def fetch_and_process_reference_data(snapshot_id):
         if owners_response.results:
             # Transform to BigQuery schema format with consistent record_timestamp
             owners_rows = []
+            normalization_count = 0
+            
             for owner in owners_response.results:
+                # Apply normalization to email field
+                original_email = owner.email
+                normalized_email = normalize_field_value('email', original_email, 'hs_owners')
+                
+                if original_email != normalized_email and original_email is not None:
+                    normalization_count += 1
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(f"Normalized owner email: '{original_email}' -> '{normalized_email}'")
+                
                 row = {
                     "owner_id": owner.id,
-                    "email": owner.email,
+                    "email": normalized_email,
                     "first_name": owner.first_name,
                     "last_name": owner.last_name,
                     "user_id": getattr(owner, 'user_id', None),
@@ -265,6 +296,10 @@ def fetch_and_process_reference_data(snapshot_id):
                     "record_timestamp": datetime.utcnow().isoformat() + "Z",
                 }
                 owners_rows.append(row)
+            
+            # Log normalization activity
+            if normalization_count > 0:
+                logger.info(f"🔧 Normalized {normalization_count} owner email addresses")
             
             # Upsert to BigQuery
             owners_count = upsert_to_bigquery(owners_rows, "hs_owners", "owner_id")

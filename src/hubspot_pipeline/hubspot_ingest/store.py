@@ -17,6 +17,7 @@ from hubspot_pipeline.bigquery_utils import (
     build_schema_from_sample,
     infer_bigquery_type
 )
+from hubspot_pipeline.hubspot_ingest.normalization import validate_normalization
 
 def store_to_bigquery(rows: List[Dict[str, Any]], table_name: str, dataset: str = None) -> None:
     """
@@ -84,9 +85,10 @@ def store_to_bigquery(rows: List[Dict[str, Any]], table_name: str, dataset: str 
         
         ensure_table_exists(client, full_table, schema_fields)
     
-    # Prepare data for insertion
+    # Prepare data for insertion with normalization validation
     prep_start = datetime.utcnow()
     processed_rows = []
+    validation_issues = 0
     
     logger.debug(f"🔄 Processing {len(rows)} rows for BigQuery insertion")
     
@@ -101,7 +103,7 @@ def store_to_bigquery(rows: List[Dict[str, Any]], table_name: str, dataset: str 
                 elif isinstance(value, (list, dict)):
                     # Convert complex types to strings for BigQuery
                     clean_row[key] = str(value)
-                    if logger.isEnabledFor(logging.DEBUG) and i == 0:
+                    if logger.isEnabledFor(logging.DEBUG) and i == 0:  # Log first record details
                         logger.debug(f"Converted complex type {key}: {type(value).__name__} -> STRING")
                 else:
                     # Ensure consistent string conversion for ID fields
@@ -109,6 +111,17 @@ def store_to_bigquery(rows: List[Dict[str, Any]], table_name: str, dataset: str 
                         clean_row[key] = str(value)  # Force string conversion for ID fields
                     else:
                         clean_row[key] = value
+            
+            # Validate normalization (in debug mode or for first few records)
+            if logger.isEnabledFor(logging.DEBUG) or i < 5:
+                validation_errors = validate_normalization(clean_row, table_name)
+                if validation_errors:
+                    validation_issues += len(validation_errors)
+                    if logger.isEnabledFor(logging.DEBUG):
+                        for error in validation_errors:
+                            logger.debug(f"🔧 Normalization validation: {error}")
+                    elif i < 5:  # Log first few issues even in non-debug mode
+                        logger.warning(f"⚠️ Normalization issue in record {i+1}: {validation_errors[0]}")
             
             processed_rows.append(clean_row)
             
@@ -120,6 +133,13 @@ def store_to_bigquery(rows: List[Dict[str, Any]], table_name: str, dataset: str 
     
     prep_time = (datetime.utcnow() - prep_start).total_seconds()
     logger.debug(f"📊 Data preparation completed in {prep_time:.2f}s")
+    
+    # Log normalization validation summary
+    if validation_issues > 0:
+        logger.warning(f"⚠️ Found {validation_issues} normalization validation issues")
+        logger.info("💡 This may indicate incomplete normalization in the fetch pipeline")
+    else:
+        logger.debug("✅ All records passed normalization validation")
     
     if not processed_rows:
         logger.warning(f"⚠️ No valid rows to insert after processing")
@@ -194,9 +214,11 @@ def upsert_to_bigquery(rows: List[Dict[str, Any]], table_name: str, id_field: st
     logger.info(f"🔄 Upserting {len(rows)} rows into {table_name} (key: {id_field})")
     
     try:
-        # Ensure consistent data types for all rows
+        # Ensure consistent data types for all rows with normalization validation
         processed_rows = []
-        for row in rows:
+        validation_issues = 0
+        
+        for i, row in enumerate(rows):
             processed_row = {}
             for key, value in row.items():
                 if value is None:
@@ -213,7 +235,25 @@ def upsert_to_bigquery(rows: List[Dict[str, Any]], table_name: str, id_field: st
                 else:
                     # Convert everything else to string
                     processed_row[key] = str(value) if value is not None else None
+            
+            # Validate normalization for upsert data
+            if logger.isEnabledFor(logging.DEBUG) or i < 5:
+                validation_errors = validate_normalization(processed_row, table_name)
+                if validation_errors:
+                    validation_issues += len(validation_errors)
+                    if logger.isEnabledFor(logging.DEBUG):
+                        for error in validation_errors:
+                            logger.debug(f"🔧 Upsert normalization validation: {error}")
+                    elif i < 5:
+                        logger.warning(f"⚠️ Upsert normalization issue in record {i+1}: {validation_errors[0]}")
+            
             processed_rows.append(processed_row)
+        
+        # Log normalization validation summary for upserts
+        if validation_issues > 0:
+            logger.warning(f"⚠️ Found {validation_issues} normalization validation issues in upsert data")
+        else:
+            logger.debug("✅ All upsert records passed normalization validation")
         
         # Get schema from sample row (after processing)
         sample = processed_rows[0]

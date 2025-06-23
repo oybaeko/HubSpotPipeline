@@ -1,5 +1,5 @@
 # ===============================================================================
-# src/scoring_main.py - Updated with rescore-all functionality
+# src/scoring_main.py - Updated with views code removed
 # ===============================================================================
 
 import logging
@@ -66,36 +66,8 @@ def main(cloud_event):
         # Check if scoring completed successfully
         if result.get('status') == 'success':
             logger.info("✅ Scoring completed successfully")
-            
-            # Refresh analytics views after successful scoring
-            logger.info("📊 Refreshing pipeline analytics views...")
-            try:
-                from hubspot_pipeline.hubspot_scoring.views import refresh_all_views
-                view_results = refresh_all_views()
-                
-                successful_views = sum(1 for success in view_results.values() if success)
-                total_views = len(view_results)
-                
-                if successful_views == total_views:
-                    logger.info(f"✅ All {total_views} analytics views refreshed successfully")
-                    result['views_updated'] = True
-                    result['views_summary'] = f"{successful_views}/{total_views} views updated"
-                else:
-                    failed_views = total_views - successful_views
-                    logger.warning(f"⚠️ Views partially updated: {successful_views}/{total_views} successful, {failed_views} failed")
-                    result['views_updated'] = 'partial'
-                    result['views_summary'] = f"{successful_views}/{total_views} views updated"
-                    result['views_details'] = view_results
-                
-            except Exception as view_error:
-                logger.error(f"❌ Failed to refresh analytics views: {view_error}")
-                # Don't fail the whole scoring process for view issues
-                result['views_updated'] = False
-                result['views_error'] = str(view_error)
-                logger.warning("⚠️ Scoring succeeded but views refresh failed")
         else:
             logger.warning(f"⚠️ Scoring failed with status: {result.get('status')}")
-            logger.info("📊 Skipping views refresh due to scoring failure")
         
         logger.info(f"🎉 Scoring function completed with status: {result.get('status')}")
         return result
@@ -131,23 +103,6 @@ def handle_rescore_all_request(message: dict, logger) -> dict:
         from hubspot_pipeline.hubspot_scoring.rescore_all import handle_rescore_all_complete
         
         result = handle_rescore_all_complete()
-        
-        # Refresh views after successful rescore-all
-        if result.get('status') in ['success', 'partial_success']:
-            logger.info("📊 Refreshing analytics views after rescore-all...")
-            try:
-                from hubspot_pipeline.hubspot_scoring.views import refresh_all_views
-                view_results = refresh_all_views()
-                
-                successful_views = sum(1 for success in view_results.values() if success)
-                total_views = len(view_results)
-                result['views_updated'] = successful_views == total_views
-                result['views_summary'] = f"{successful_views}/{total_views} views updated"
-                
-            except Exception as view_error:
-                logger.error(f"❌ Failed to refresh views after rescore-all: {view_error}")
-                result['views_updated'] = False
-                result['views_error'] = str(view_error)
         
         logger.info(f"🎉 Rescore-all completed with status: {result.get('status')}")
         return result
